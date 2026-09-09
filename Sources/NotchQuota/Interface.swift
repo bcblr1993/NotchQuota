@@ -41,10 +41,10 @@ struct DisplayState {
 struct IdleState {
     static let delay: TimeInterval = 15
     var lastInteraction: TimeInterval = 0
-    var visible = true
-    mutating func interact(at time: TimeInterval) { lastInteraction = time; visible = true }
+    var active = true
+    mutating func interact(at time: TimeInterval) { lastInteraction = time; active = true }
     mutating func tick(at time: TimeInterval) -> Bool {
-        if visible && time - lastInteraction >= Self.delay { visible = false; return true }
+        if active && time - lastInteraction >= Self.delay { active = false; return true }
         return false
     }
 }

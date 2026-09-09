@@ -9,7 +9,7 @@ enum Provider: String, CaseIterable, Codable {
 /// Selection is independent of login state and whether an installed app is running.
 struct ProviderSelection {
     var installed: [Provider]
-    var outlineProvider: Provider? { Provider.allCases.first(where: installed.contains) }
+    var defaultProvider: Provider? { Provider.allCases.first(where: installed.contains) }
     func selected(preferred: Provider) -> Provider? {
         installed.contains(preferred) ? preferred : installed.first
     }

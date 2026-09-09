@@ -22,9 +22,9 @@ final class QuotaTests: XCTestCase {
         XCTAssert(QuotaTint.color(19) != QuotaTint.color(20) && QuotaTint.color(51) != QuotaTint.color(50), "红黄绿边界")
         var idle = IdleState(); idle.interact(at: 100)
         XCTAssert(!idle.tick(at: 114.99), "15 秒之前保持显示")
-        XCTAssert(idle.tick(at: 115) && !idle.visible, "15 秒时隐藏")
-        XCTAssert(!idle.tick(at: 130), "隐藏后不会自行显示")
-        idle.interact(at: 131); XCTAssert(idle.visible && !idle.tick(at: 145), "再次操作重新计时")
+        XCTAssert(idle.tick(at: 115) && !idle.active, "15 秒结束交互")
+        XCTAssert(!idle.tick(at: 130), "空闲后不重复触发")
+        idle.interact(at: 131); XCTAssert(idle.active && !idle.tick(at: 145), "再次操作重新计时")
         XCTAssert(idle.tick(at: 146), "重新操作后完整 15 秒")
         XCTAssert(Provider.codex.next.next.next == .codex, "三图标循环")
         let stale = DisplayState(snapshot: Snapshot(windows: codex.windows, fetchedAt: Date().addingTimeInterval(-601)))
@@ -70,50 +70,16 @@ final class ProviderSelectionTests: XCTestCase {
     }
 }
 
-final class OutlineTests: XCTestCase {
+final class DefaultProviderTests: XCTestCase {
     func testPriorityIsIndependentOfSelectedAppAndDetectionOrder() {
-        XCTAssertEqual(ProviderSelection(installed: [.antigravity, .claude, .codex]).outlineProvider, .codex)
-        XCTAssertEqual(ProviderSelection(installed: [.antigravity, .claude]).outlineProvider, .claude)
-        XCTAssertEqual(ProviderSelection(installed: [.antigravity]).outlineProvider, .antigravity)
-        XCTAssertNil(ProviderSelection(installed: []).outlineProvider)
-    }
-    func testOutlineProgressAndNormalScreenFallback() {
-        let points = OutlineGeometry.points(size: CGSize(width: 190, height: 35), hasNotch: true)
-        XCTAssertEqual(points.first?.y, 0)
-        XCTAssertEqual(points.last?.y, 0)
-        XCTAssertTrue(points.allSatisfy { $0.x >= 0 && $0.x <= 190 && $0.y >= 0 && $0.y <= 35 })
-        XCTAssertTrue(OutlineGeometry.trim(points, fraction: 0).isEmpty)
-        XCTAssertTrue(OutlineGeometry.trim(points, fraction: .nan).isEmpty)
-        XCTAssertEqual(OutlineGeometry.trim(points, fraction: 1), points)
-        let half = OutlineGeometry.trim(points, fraction: 0.5)
-        XCTAssertEqual(half.last!.x, 95, accuracy: 0.01)
-        XCTAssertEqual(half.last!.y, 33.5, accuracy: 0.01)
-        let flat = OutlineGeometry.points(size: CGSize(width: 80, height: 4), hasNotch: false)
-        XCTAssertEqual(flat.count, 2)
-        XCTAssertEqual(OutlineGeometry.trim(flat, fraction: 0.5).last?.x, 40)
+        XCTAssertEqual(ProviderSelection(installed: [.antigravity, .claude, .codex]).defaultProvider, .codex)
+        XCTAssertEqual(ProviderSelection(installed: [.antigravity, .claude]).defaultProvider, .claude)
+        XCTAssertEqual(ProviderSelection(installed: [.antigravity]).defaultProvider, .antigravity)
+        XCTAssertNil(ProviderSelection(installed: []).defaultProvider)
     }
     @MainActor func testIconsShareSmallVisualBounds() {
         for provider in Provider.allCases {
             XCTAssertEqual(max(provider.icon.size.width, provider.icon.size.height), 16, accuracy: 0.01)
         }
-    }
-}
-
-final class BreathingTests: XCTestCase {
-    @MainActor func testAnimationLifecycleAndPowerPolicy() {
-        let view = NotchOutlineView(frame: .zero)
-        view.state = DisplayState(snapshot: Snapshot(windows: [.init(id: "test", label: "test", remaining: 65)]))
-        view.setBreathing(active: true, reducedMotion: false, lowPower: false)
-        XCTAssertTrue(view.isBreathing)
-        XCTAssertEqual(view.layer?.animation(forKey: "breathing")?.duration, 2.4)
-        view.setBreathing(active: true, reducedMotion: true, lowPower: false)
-        XCTAssertFalse(view.isBreathing)
-        view.setBreathing(active: true, reducedMotion: false, lowPower: true)
-        XCTAssertFalse(view.isBreathing)
-        view.setBreathing(active: false, reducedMotion: false, lowPower: false)
-        XCTAssertFalse(view.isBreathing)
-        view.state = DisplayState()
-        view.setBreathing(active: true, reducedMotion: false, lowPower: false)
-        XCTAssertFalse(view.isBreathing)
     }
 }
