@@ -11,6 +11,14 @@
 - **Apple Silicon（M 系列），macOS 13 或更高版本**，同时适配刘海屏和普通显示器。
 - 读取已经保存的登录，不需要让三个原应用保持运行。每 3 分钟自动刷新。
 
+## 预览
+
+下图为原生界面的演示数据。
+
+<img src="docs/images/compact.png" width="279" alt="紧凑刘海：仅图标和额度" />
+
+<img src="docs/images/details.png" width="279" alt="展开后显示各周期额度" />
+
 ## 安装
 
 从 [Releases](https://github.com/bcblr1993/NotchQuota/releases/latest) 下载 `macos-arm64.dmg`，打开后将 **NotchQuota** 拖入 **Applications**，再启动。
