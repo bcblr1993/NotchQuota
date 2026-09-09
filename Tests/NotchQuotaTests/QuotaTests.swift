@@ -98,3 +98,22 @@ final class OutlineTests: XCTestCase {
         }
     }
 }
+
+final class BreathingTests: XCTestCase {
+    @MainActor func testAnimationLifecycleAndPowerPolicy() {
+        let view = NotchOutlineView(frame: .zero)
+        view.state = DisplayState(snapshot: Snapshot(windows: [.init(id: "test", label: "test", remaining: 65)]))
+        view.setBreathing(active: true, reducedMotion: false, lowPower: false)
+        XCTAssertTrue(view.isBreathing)
+        XCTAssertEqual(view.layer?.animation(forKey: "breathing")?.duration, 2.4)
+        view.setBreathing(active: true, reducedMotion: true, lowPower: false)
+        XCTAssertFalse(view.isBreathing)
+        view.setBreathing(active: true, reducedMotion: false, lowPower: true)
+        XCTAssertFalse(view.isBreathing)
+        view.setBreathing(active: false, reducedMotion: false, lowPower: false)
+        XCTAssertFalse(view.isBreathing)
+        view.state = DisplayState()
+        view.setBreathing(active: true, reducedMotion: false, lowPower: false)
+        XCTAssertFalse(view.isBreathing)
+    }
+}

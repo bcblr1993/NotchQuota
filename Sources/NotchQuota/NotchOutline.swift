@@ -1,22 +1,49 @@
 import AppKit
+import QuartzCore
 
-/// A static, click-through quota outline; no display link or repeating animation.
+/// One compositor opacity animation; pixels are redrawn only when quota/layout changes.
 final class NotchOutlineView: NSView {
     var state = DisplayState()
     var hasNotch = true
     override var isFlipped: Bool { true }
+    override init(frame frameRect: NSRect) { super.init(frame: frameRect); wantsLayer = true }
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+    func setBreathing(active: Bool, reducedMotion: Bool, lowPower: Bool) {
+        guard active, !reducedMotion, !lowPower, state.snapshot?.remaining != nil, !state.stale else {
+            layer?.removeAnimation(forKey: "breathing")
+            return
+        }
+        guard layer?.animation(forKey: "breathing") == nil else { return }
+        let pulse = CABasicAnimation(keyPath: "opacity")
+        pulse.fromValue = 0.62; pulse.toValue = 1.0
+        pulse.duration = 2.4; pulse.autoreverses = true; pulse.repeatCount = .infinity
+        pulse.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+        layer?.add(pulse, forKey: "breathing")
+    }
+    var isBreathing: Bool { layer?.animation(forKey: "breathing") != nil }
+
     override func draw(_ dirtyRect: NSRect) {
         let points = OutlineGeometry.points(size: bounds.size, hasNotch: hasNotch)
         let value = state.snapshot?.remaining
-        let color = state.stale ? NSColor.gray : QuotaTint.color(value)
-        stroke(points, color: color.withAlphaComponent(value == nil || state.stale ? 0.5 : 0.22))
-        if let value { stroke(OutlineGeometry.trim(points, fraction: value / 100), color: color) }
+        let color: NSColor
+        if value == nil || state.stale { color = .gray }
+        else if value! > 50 { color = NSColor(srgbRed: 0.12, green: 1, blue: 0.52, alpha: 1) }
+        else if value! >= 20 { color = NSColor(srgbRed: 1, green: 0.8, blue: 0.10, alpha: 1) }
+        else { color = NSColor(srgbRed: 1, green: 0.24, blue: 0.29, alpha: 1) }
+        // A dark underlay keeps the saturated core readable against bright wallpapers.
+        stroke(points, color: NSColor.black.withAlphaComponent(0.3), width: 3.2)
+        stroke(points, color: color.withAlphaComponent(value == nil || state.stale ? 0.65 : 0.32), width: 2)
+        if let value {
+            let remaining = OutlineGeometry.trim(points, fraction: value / 100)
+            stroke(remaining, color: color.withAlphaComponent(0.25), width: 4.5)
+            stroke(remaining, color: color, width: 2.1)
+        }
     }
-    private func stroke(_ points: [CGPoint], color: NSColor) {
+    private func stroke(_ points: [CGPoint], color: NSColor, width: CGFloat) {
         guard let first = points.first, points.count > 1 else { return }
         let path = NSBezierPath(); path.move(to: first)
         for point in points.dropFirst() { path.line(to: point) }
-        path.lineWidth = 1.5; path.lineCapStyle = .round; path.lineJoinStyle = .round
+        path.lineWidth = width; path.lineCapStyle = .round; path.lineJoinStyle = .round
         color.setStroke(); path.stroke()
     }
 }

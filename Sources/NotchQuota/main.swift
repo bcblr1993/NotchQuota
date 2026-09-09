@@ -25,6 +25,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var localMonitor: Any?
     var displayObserver: NSObjectProtocol?
     var wakeObserver: NSObjectProtocol?
+    var appearanceObservers: [NSObjectProtocol] = []
+    var displaySleeping = false
     var hoverWork: DispatchWorkItem?
     var collapseWork: DispatchWorkItem?
     var activeMenu: NSMenu?
@@ -72,6 +74,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         displayObserver = NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main) { [weak self] _ in Task { @MainActor [weak self] in self?.updateScreen() } }
         wakeObserver = NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak self] _ in Task { @MainActor [weak self] in self?.updateScreen(); self?.refreshAll() } }
+        for name in [NSWorkspace.accessibilityDisplayOptionsDidChangeNotification, NSWorkspace.screensDidWakeNotification, NSWorkspace.didWakeNotification] {
+            appearanceObservers.append(NSWorkspace.shared.notificationCenter.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                Task { @MainActor [weak self] in
+                    if name != NSWorkspace.accessibilityDisplayOptionsDidChangeNotification { self?.displaySleeping = false }
+                    self?.updateBreathing()
+                }
+            })
+        }
+        for name in [NSWorkspace.screensDidSleepNotification, NSWorkspace.willSleepNotification] {
+            appearanceObservers.append(NSWorkspace.shared.notificationCenter.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                Task { @MainActor [weak self] in self?.displaySleeping = true; self?.updateBreathing() }
+            })
+        }
+        appearanceObservers.append(NotificationCenter.default.addObserver(forName: .NSProcessInfoPowerStateDidChange, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor [weak self] in self?.updateBreathing() }
+        })
         refreshAll()
         if testMode { runUISmoke() }
     }
@@ -131,7 +149,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func updateOutline() {
         guard let screen, outlinePanel != nil else { return }
         guard !idle.visible, let selected = ProviderSelection(installed: installed).outlineProvider else {
-            outlinePanel.orderOut(nil); return
+            outlinePanel.orderOut(nil); updateBreathing(); return
         }
         let width = cameraWidth > 0 ? cameraWidth + 5 : 80
         let height = cameraWidth > 0 ? topHeight + 3 : 4
@@ -141,6 +159,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         outlineView.state = states[selected] ?? DisplayState()
         outlineView.needsDisplay = true
         if !outlinePanel.isVisible { outlinePanel.orderFrontRegardless() }
+        updateBreathing()
+    }
+    func updateBreathing() {
+        outlineView.setBreathing(active: outlinePanel.isVisible && !displaySleeping,
+                                 reducedMotion: NSWorkspace.shared.accessibilityDisplayShouldReduceMotion,
+                                 lowPower: ProcessInfo.processInfo.isLowPowerModeEnabled)
     }
     func activity() {
         guard !installed.isEmpty, idle.visible else { return }
@@ -165,7 +189,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard !installed.isEmpty else { return }
         visibilityRevision += 1
         idle.interact(at: ProcessInfo.processInfo.systemUptime)
-        outlinePanel.orderOut(nil)
+        outlinePanel.orderOut(nil); updateBreathing()
         scheduleIdle()
         if !panel.isVisible { panel.alphaValue = 0; resize(); panel.orderFrontRegardless() }
         NSAnimationContext.runAnimationGroup { context in
@@ -304,10 +328,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             check(!panel.isVisible && !idle.visible && outlinePanel.isVisible, "idle 15s keeps outline")
             check(outlineView.state.snapshot?.remaining == states[.codex]?.snapshot?.remaining, "outline defaults to Codex")
             capture("outline-codex", view: outlineView)
+            if motionDuration > 0 {
+                check(outlineView.isBreathing, "standby breathing enabled")
+                let firstOpacity = outlineView.layer?.presentation()?.opacity ?? 0
+                await settle(0.65)
+                let secondOpacity = outlineView.layer?.presentation()?.opacity ?? 0
+                check(abs(secondOpacity - firstOpacity) > 0.01, "compositor brightness changes")
+            }
+            displaySleeping = true; updateBreathing()
+            check(!outlineView.isBreathing, "screen sleep stops breathing")
+            displaySleeping = false; updateBreathing()
             mouseMoved(at: NSPoint(x: revealRect.minX - 100, y: revealRect.minY - 100))
             mouseMoved(at: NSPoint(x: revealRect.midX, y: revealRect.midY))
             await settle()
-            check(panel.isVisible && panel.alphaValue == 1 && !outlinePanel.isVisible, "hotzone reappear")
+            check(panel.isVisible && panel.alphaValue == 1 && !outlinePanel.isVisible && !outlineView.isBreathing, "hotzone reappear")
             hoverWork?.cancel(); hoverWork = nil
             hide(); await settle(0.05); show(); await settle()
             check(panel.isVisible && idle.visible && panel.alphaValue == 1, "hide/show reversal")
