@@ -79,3 +79,9 @@ NOTCHQUOTA_SMOKE_DIR=/path/to/output build/NotchQuota.app/Contents/MacOS/NotchQu
 ## 许可证
 
 项目原创代码采用 [MIT](LICENSE) 许可证。应用图标及相关商标属于各自权利人，详见 [第三方声明](THIRD_PARTY_NOTICES.md)。
+
+### 轻量过渡与安装识别
+
+显示/隐藏、展开/收起和图标切换使用约 0.2 秒的原生过渡；系统开启“减少动态效果”或低电量模式时立即切换。没有循环动画或逐帧轮询，三枚图标在内存中复用。
+
+只显示本机已安装的 Codex、Claude、Antigravity 桌面应用（ChatGPT 不算 Codex）。只安装一个时点击图标不会切换；都未安装时不显示窗口、图标或额度。安装检测在启动、唤出及每 3 分钟刷新时执行；检测到新安装应用不会自行弹出，移入顶部热点即可显示。应用无需运行，但查询额度仍需已有有效登录。

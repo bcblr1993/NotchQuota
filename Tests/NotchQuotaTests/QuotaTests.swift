@@ -43,3 +43,29 @@ final class EndpointTests: XCTestCase {
         XCTAssertThrowsError(try Installation.endpoint(from: Data()))
     }
 }
+
+final class ProviderSelectionTests: XCTestCase {
+    func testAllInstallationCombinations() {
+        for mask in 0..<8 {
+            let available = Provider.allCases.enumerated().compactMap { index, provider in
+                mask & (1 << index) != 0 ? provider : nil
+            }
+            let selection = ProviderSelection(installed: available)
+            for preferred in Provider.allCases {
+                XCTAssertEqual(selection.selected(preferred: preferred), available.contains(preferred) ? preferred : available.first)
+                if available.isEmpty { XCTAssertNil(selection.next(after: preferred)) }
+                else { XCTAssertTrue(available.contains(selection.next(after: preferred)!)) }
+            }
+            if let first = available.first {
+                var current = first
+                for _ in available { current = selection.next(after: current)! }
+                XCTAssertEqual(current, first)
+            }
+        }
+    }
+    func testUninstallSelectedAppFallsBackAndSingleAppDoesNotSwitch() {
+        let selection = ProviderSelection(installed: [.claude])
+        XCTAssertEqual(selection.selected(preferred: .codex), .claude)
+        XCTAssertEqual(selection.next(after: .claude), .claude)
+    }
+}

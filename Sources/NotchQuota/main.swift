@@ -1,10 +1,18 @@
 import AppKit
+import QuartzCore
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     var panel: NotchPanel!
     var quotaView: QuotaView!
     var provider = Provider(rawValue: UserDefaults.standard.string(forKey: "provider") ?? "") ?? .codex
+    var installed: [Provider] = []
+    var visibilityRevision = 0
+    var suppressMotion = false
+    var smokeInstalled: [Provider]?
+    var motionDuration: TimeInterval {
+        suppressMotion || NSWorkspace.shared.accessibilityDisplayShouldReduceMotion || ProcessInfo.processInfo.isLowPowerModeEnabled ? 0 : 0.20
+    }
     var states: [Provider: DisplayState] = [:]
     var lastAttempt: [Provider: Date] = [:]
     let reader = QuotaReader()
@@ -39,12 +47,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         quotaView = QuotaView(frame: .zero); panel.contentView = quotaView
         quotaView.onSwitch = { [weak self] in self?.next() }
         quotaView.onExpand = { [weak self] in self?.toggleExpanded() }
-        quotaView.onActivity = { [weak self] in self?.activity() }
-        quotaView.onLeave = { [weak self] in self?.leave() }
+        quotaView.onActivity = { [weak self] in if self?.testMode == false { self?.activity() } }
+        quotaView.onLeave = { [weak self] in if self?.testMode == false { self?.leave() } }
         quotaView.onContextMenu = { [weak self] event in self?.menu(event) }
         updateScreen()
         if demo || testMode { loadDemo() }
-        updateView(); show()
+        discoverInstalled(); updateView(); show()
         scheduleIdle()
         refreshTimer = Timer.scheduledTimer(withTimeInterval: 180, repeats: true) { [weak self] _ in Task { @MainActor [weak self] in self?.refreshAll() } }
         refreshTimer?.tolerance = 15
@@ -76,7 +84,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         quotaView?.cameraWidth = cameraWidth; quotaView?.topHeight = topHeight
         resize()
     }
-    func resize() {
+    func resize(animated: Bool = false) {
         guard let screen, panel != nil else { return }
         let compact = cameraWidth > 0 ? cameraWidth + 94 : 100
         let expanded = quotaView.expanded
@@ -84,32 +92,64 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let rows = min(6, states[provider]?.snapshot?.windows.count ?? 0)
         let detailHeight: CGFloat = rows == 0 ? 105 : CGFloat(12 + 39 + rows * 32 + 29)
         let height = topHeight + (expanded ? detailHeight : 0)
-        panel.setFrame(NSRect(x: screen.frame.midX - width / 2, y: screen.frame.maxY - height, width: width, height: height), display: true)
-        quotaView.frame = NSRect(origin: .zero, size: panel.frame.size)
+        let target = NSRect(x: screen.frame.midX - width / 2, y: screen.frame.maxY - height, width: width, height: height)
         quotaView.update()
+        guard panel.frame != target else { return }
+        if animated && idle.visible && panel.isVisible && motionDuration > 0 {
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = motionDuration
+                context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+                panel.animator().setFrame(target, display: true)
+            }
+        } else { panel.setFrame(target, display: panel.isVisible) }
     }
-    func updateView() { quotaView.provider = provider; quotaView.state = states[provider] ?? DisplayState(); resize() }
+    func discoverInstalled() {
+        let detected = testMode ? (smokeInstalled ?? Provider.allCases) : demo ? Provider.allCases : Provider.allCases.filter { Installation.app($0.title) != nil }
+        guard detected != installed else {
+            if detected.isEmpty { idle.visible = false }
+            return
+        }
+        installed = detected
+        if let selected = ProviderSelection(installed: installed).selected(preferred: provider) { provider = selected }
+        if installed.isEmpty { hide() }
+        updateView()
+    }
+    func updateView(animated: Bool = false) {
+        quotaView.provider = provider
+        quotaView.nextProviderTitle = installed.count > 1 ? ProviderSelection(installed: installed).next(after: provider)?.title : nil
+        quotaView.state = states[provider] ?? DisplayState()
+        resize(animated: animated)
+    }
     func activity() {
+        guard !installed.isEmpty, idle.visible else { return }
         collapseWork?.cancel()
         idle.interact(at: ProcessInfo.processInfo.systemUptime)
         scheduleIdle()
         guard !quotaView.expanded, hoverWork == nil else { return }
         let work = DispatchWorkItem { [weak self] in
             guard let self else { return }; self.hoverWork = nil
-            if self.idle.visible && self.panel.frame.contains(NSEvent.mouseLocation) { self.quotaView.expanded = true; self.resize() }
+            if self.idle.visible && self.panel.frame.contains(NSEvent.mouseLocation) { self.quotaView.expanded = true; self.resize(animated: true) }
         }
         hoverWork = work; DispatchQueue.main.asyncAfter(deadline: .now() + 0.55, execute: work)
     }
     func leave() {
         hoverWork?.cancel(); hoverWork = nil
         collapseWork?.cancel()
-        let work = DispatchWorkItem { [weak self] in self?.quotaView.expanded = false; self?.resize() }
+        let work = DispatchWorkItem { [weak self] in self?.quotaView.expanded = false; self?.resize(animated: true) }
         collapseWork = work; DispatchQueue.main.asyncAfter(deadline: .now() + 0.35, execute: work)
     }
     func show() {
+        discoverInstalled()
+        guard !installed.isEmpty else { return }
+        visibilityRevision += 1
         idle.interact(at: ProcessInfo.processInfo.systemUptime)
         scheduleIdle()
-        panel.alphaValue = 1; panel.orderFrontRegardless()
+        if !panel.isVisible { panel.alphaValue = 0; resize(); panel.orderFrontRegardless() }
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = motionDuration
+            context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            panel.animator().alphaValue = 1
+        }
     }
     func hide() {
         hoverWork?.cancel(); hoverWork = nil; collapseWork?.cancel()
@@ -117,8 +157,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         activeMenu?.cancelTracking()
         idleTimer?.invalidate(); idleTimer = nil
         hiddenPointerInside = revealRect.contains(NSEvent.mouseLocation)
-        quotaView.expanded = false
-        panel.orderOut(nil); resize()
+        visibilityRevision += 1
+        let revision = visibilityRevision
+        NSAnimationContext.runAnimationGroup({ context in
+            context.duration = panel.isVisible ? motionDuration : 0
+            context.timingFunction = CAMediaTimingFunction(name: .easeIn)
+            panel.animator().alphaValue = 0
+        }, completionHandler: { [weak self] in
+            Task { @MainActor [weak self] in
+                guard let self, self.visibilityRevision == revision, !self.idle.visible else { return }
+                self.panel.orderOut(nil)
+                self.quotaView.expanded = false
+                self.resize()
+            }
+        })
     }
     var revealRect: NSRect {
         guard let screen else { return .zero }
@@ -126,6 +178,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return NSRect(x: screen.frame.midX - width / 2, y: screen.frame.maxY - topHeight - 3, width: width, height: topHeight + 3)
     }
     func mouseMoved(at point: NSPoint? = nil) {
+        guard !testMode || point != nil else { return }
         let position = point ?? NSEvent.mouseLocation
         if !idle.visible {
             let inside = revealRect.contains(position)
@@ -134,6 +187,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         } else if panel.frame.contains(position) { activity() }
     }
     func scheduleIdle() {
+        guard idle.visible, !installed.isEmpty else { return }
         let remaining = max(0.05, IdleState.delay - (ProcessInfo.processInfo.systemUptime - idle.lastInteraction))
         if let timer = idleTimer, timer.isValid { timer.fireDate = Date().addingTimeInterval(remaining); return }
         idleTimer = Timer(timeInterval: remaining, repeats: false) { [weak self] _ in Task { @MainActor [weak self] in self?.tick() } }
@@ -145,24 +199,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         else if idle.visible { scheduleIdle() }
     }
     func next() {
-        provider = provider.next
+        guard installed.count > 1, let next = ProviderSelection(installed: installed).next(after: provider) else { return }
+        if panel.isVisible && motionDuration > 0 {
+            let transition = CATransition()
+            transition.type = .fade; transition.duration = motionDuration
+            transition.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            quotaView.layer?.add(transition, forKey: "providerSwitch")
+        }
+        provider = next
         if !demo && !testMode { UserDefaults.standard.set(provider.rawValue, forKey: "provider") }
-        updateView(); refresh(provider)
+        updateView(animated: true); refresh(provider)
     }
     func toggleExpanded() {
         hoverWork?.cancel(); hoverWork = nil
-        quotaView.expanded.toggle(); resize()
+        quotaView.expanded.toggle(); resize(animated: true)
     }
-    func refreshAll() { for provider in Provider.allCases { refresh(provider) } }
+    func refreshAll() { discoverInstalled(); for provider in installed { refresh(provider) } }
     func refresh(_ p: Provider) {
-        guard !demo, !testMode, states[p]?.loading != true else { return }
+        guard installed.contains(p), !demo, !testMode, states[p]?.loading != true else { return }
         if let last = lastAttempt[p], Date().timeIntervalSince(last) < 30 { return }
         lastAttempt[p] = Date(); var state = states[p] ?? DisplayState(); state.loading = true; states[p] = state
-        if p == provider { updateView() }
+        if p == provider { updateView(animated: true) }
         Task {
             do { let snapshot = try await reader.fetch(p); states[p] = DisplayState(snapshot: snapshot) }
             catch { var failed = states[p] ?? DisplayState(); failed.loading = false; failed.error = readableError(error); states[p] = failed }
-            if p == provider { updateView() }
+            if p == provider { updateView(animated: true) }
         }
     }
     func readableError(_ error: Error) -> String {
@@ -199,18 +260,50 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             quotaView.cacheDisplay(in: quotaView.bounds, to: rep)
             if let data = rep.representation(using: .png, properties: [:]) { try? data.write(to: URL(fileURLWithPath: base).appendingPathComponent(name + ".png")) }
         }
+        suppressMotion = true
         provider = .codex; updateView(); capture("compact")
         quotaView.expanded = true; resize(); capture("codex")
         next(); capture("claude"); next(); capture("antigravity")
-        quotaView.expanded = false; resize(); show()
-        DispatchQueue.main.asyncAfter(deadline: .now() + 15.8) { [self] in
-            let passed = !panel.isVisible && !idle.visible
-            print("UI idle 15s: \(passed ? "PASS" : "FAIL")")
+        quotaView.expanded = false; resize(); suppressMotion = false; show()
+        Task { @MainActor in
+            var failures = 0
+            func check(_ condition: Bool, _ name: String) {
+                print("UI \(name): \(condition ? "PASS" : "FAIL")")
+                if !condition { failures += 1 }
+            }
+            func settle(_ seconds: Double = 0.35) async {
+                try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+            }
+            await settle(15.8)
+            check(!panel.isVisible && !idle.visible, "idle 15s")
             mouseMoved(at: NSPoint(x: revealRect.minX - 100, y: revealRect.minY - 100))
             mouseMoved(at: NSPoint(x: revealRect.midX, y: revealRect.midY))
-            print("UI hotzone reappear: \(panel.isVisible ? "PASS" : "FAIL")")
+            await settle()
+            check(panel.isVisible && panel.alphaValue == 1, "hotzone reappear")
+            hoverWork?.cancel(); hoverWork = nil
+            hide(); await settle(0.05); show(); await settle()
+            check(panel.isVisible && idle.visible && panel.alphaValue == 1, "hide/show reversal")
+            quotaView.expanded = false; resize()
+            toggleExpanded(); await settle(0.08)
+            if motionDuration > 0 { check(panel.frame.height > topHeight && panel.frame.height < topHeight + 208, "expansion intermediate frame") }
+            capture("transition")
+            await settle(); capture("expanded-animated")
+            toggleExpanded(); await settle()
+            toggleExpanded(); await settle(0.05); toggleExpanded(); await settle()
+            check(abs(panel.frame.height - topHeight) < 1, "expand/collapse reversal")
+            check(abs(panel.frame.maxY - (screen?.frame.maxY ?? 0)) < 1, "top anchor")
+            smokeInstalled = [.claude]; discoverInstalled(); next(); await settle()
+            check(provider == .claude && quotaView.nextProviderTitle == nil, "single app stays selected")
+            capture("claude-only")
+            smokeInstalled = []; discoverInstalled(); await settle(); show(); await settle()
+            check(!panel.isVisible && !idle.visible && idleTimer == nil, "no apps stays empty")
+            smokeInstalled = [.antigravity]; refreshAll(); await settle()
+            check(!panel.isVisible && !idle.visible, "background discovery stays hidden")
+            show(); await settle()
+            check(panel.isVisible && provider == .antigravity, "new install on reveal")
             print("Compact: \(cameraWidth + (cameraWidth > 0 ? 94 : 100)) × \(topHeight)")
-            NSApp.terminate(nil)
+            fflush(stdout)
+            exit(failures == 0 ? 0 : 1)
         }
     }
 }

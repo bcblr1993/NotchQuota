@@ -6,6 +6,18 @@ enum Provider: String, CaseIterable, Codable {
     var title: String { switch self { case .codex: return "Codex"; case .claude: return "Claude"; case .antigravity: return "Antigravity" } }
     var next: Provider { Self.allCases[(Self.allCases.firstIndex(of: self)! + 1) % Self.allCases.count] }
 }
+/// Selection is independent of login state and whether an installed app is running.
+struct ProviderSelection {
+    var installed: [Provider]
+    func selected(preferred: Provider) -> Provider? {
+        installed.contains(preferred) ? preferred : installed.first
+    }
+    func next(after current: Provider) -> Provider? {
+        guard !installed.isEmpty else { return nil }
+        guard let index = installed.firstIndex(of: current) else { return installed.first }
+        return installed[(index + 1) % installed.count]
+    }
+}
 struct QuotaWindow: Identifiable, Codable {
     var id: String
     var label: String

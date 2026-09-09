@@ -6,18 +6,18 @@ enum Installation {
     static func app(_ name: String) -> URL? {
         let identifiers: [String]
         switch name {
-        case "Codex": identifiers = ["com.openai.codex", "com.openai.chat", "com.openai.chatgpt"]
+        case "Codex": identifiers = ["com.openai.codex"]
         case "Claude": identifiers = ["com.anthropic.claudefordesktop"]
         case "Antigravity": identifiers = ["com.google.antigravity", "com.google.antigravity.ide"]
         default: identifiers = []
         }
-        let names = name == "Codex" ? ["Codex", "ChatGPT"] : [name]
+        let names = [name]
         let roots = [URL(fileURLWithPath: "/Applications"), FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Applications")]
         for root in roots { for name in names {
             let url = root.appendingPathComponent(name + ".app")
-            if FileManager.default.fileExists(atPath: url.path) { return url }
+            if Bundle(url: url) != nil { return url }
         } }
-        for id in identifiers { if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: id) { return url } }
+        for id in identifiers { if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: id), Bundle(url: url) != nil { return url } }
         return nil
     }
     static func antigravityServer() throws -> URL {

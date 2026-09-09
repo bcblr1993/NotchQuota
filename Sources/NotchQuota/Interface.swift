@@ -1,10 +1,11 @@
 import AppKit
 
 extension Provider {
-    var icon: NSImage {
-        if let url = ResourceLocator.icon(rawValue), let image = NSImage(contentsOf: url) { return image }
-        return NSImage(systemSymbolName: "sparkles", accessibilityDescription: title)!
-    }
+    @MainActor private static let icons: [Provider: NSImage] = Dictionary(uniqueKeysWithValues: allCases.map {
+        ($0, ResourceLocator.icon($0.rawValue).flatMap(NSImage.init(contentsOf:)) ?? NSImage(systemSymbolName: "sparkles", accessibilityDescription: $0.title)!)
+    })
+    @MainActor var icon: NSImage { Self.icons[self]! }
+
 }
 enum QuotaTint {
     static func color(_ remaining: Double?) -> NSColor {
@@ -40,6 +41,7 @@ final class QuotaButton: NSButton {
 }
 final class QuotaView: NSView {
     var provider: Provider = .codex
+    var nextProviderTitle: String?
     var state = DisplayState()
     var topHeight: CGFloat = 32
     var cameraWidth: CGFloat = 0
@@ -70,8 +72,8 @@ final class QuotaView: NSView {
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
     func update() {
         iconButton.image = provider.icon
-        iconButton.toolTip = "\(provider.title) · 点击切换"
-        iconButton.setAccessibilityLabel("当前 \(provider.title)，切换至 \(provider.next.title)")
+        iconButton.toolTip = nextProviderTitle.map { "切换至 \($0)" } ?? provider.title
+        iconButton.setAccessibilityLabel(nextProviderTitle.map { "当前 \(provider.title)，切换至 \($0)" } ?? "当前 \(provider.title)")
         quotaButton.title = ""
         quotaButton.setAccessibilityLabel("\(provider.title) 剩余额度 \(percentage)，显示详情")
         quotaButton.toolTip = state.error ?? (state.stale ? "上次读取的额度，等待更新" : "剩余额度 · 点击展开")
@@ -110,6 +112,7 @@ final class QuotaView: NSView {
         path.fill()
         // Square top joins the physical notch; the actual camera remains empty.
         NSRect(x: 0, y: 0, width: bounds.width, height: min(12, topHeight)).fill()
+        path.addClip() // Keep revealed rows inside the rounded bottom during resizing.
         let tint = state.stale ? NSColor(white: 0.55, alpha: 1) : QuotaTint.color(state.snapshot?.remaining)
         let button = quotaButton.frame
         text(percentage, x: button.minX + 2, y: (topHeight - 17) / 2, size: 12, color: tint, weight: .medium, width: button.width - 7, align: .right)
@@ -117,7 +120,7 @@ final class QuotaView: NSView {
             (state.stale ? NSColor(white: 0.65, alpha: 1) : tint).setFill()
             NSBezierPath(ovalIn: NSRect(x: button.minX + 3, y: topHeight / 2 - 1.5, width: 3, height: 3)).fill()
         }
-        guard expanded else { return }
+        guard expanded || bounds.height > topHeight + 1 else { return }
         let muted = NSColor(white: 0.61, alpha: 1)
         let rows = state.snapshot?.windows ?? []
         var y = topHeight + 12
