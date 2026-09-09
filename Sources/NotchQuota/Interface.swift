@@ -35,6 +35,9 @@ final class NotchPanel: NSPanel {
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
 }
+final class QuotaButton: NSButton {
+    override func rightMouseDown(with event: NSEvent) { superview?.rightMouseDown(with: event) }
+}
 final class QuotaView: NSView {
     var provider: Provider = .codex
     var state = DisplayState()
@@ -46,8 +49,8 @@ final class QuotaView: NSView {
     var onActivity: (() -> Void)?
     var onLeave: (() -> Void)?
     var onContextMenu: ((NSEvent) -> Void)?
-    private let iconButton = NSButton()
-    private let quotaButton = NSButton()
+    private let iconButton = QuotaButton()
+    private let quotaButton = QuotaButton()
     override var isFlipped: Bool { true }
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
