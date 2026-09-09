@@ -2,9 +2,25 @@ import AppKit
 
 extension Provider {
     @MainActor private static let icons: [Provider: NSImage] = Dictionary(uniqueKeysWithValues: allCases.map {
-        ($0, ResourceLocator.icon($0.rawValue).flatMap(NSImage.init(contentsOf:)) ?? NSImage(systemSymbolName: "sparkles", accessibilityDescription: $0.title)!)
+        let source = ResourceLocator.icon($0.rawValue).flatMap(NSImage.init(contentsOf:)) ?? NSImage(systemSymbolName: "sparkles", accessibilityDescription: $0.title)!
+        return ($0, normalizedIcon(source))
     })
     @MainActor var icon: NSImage { Self.icons[self]! }
+    /// Strip different transparent margins once, then give every mark the same 16 pt box.
+    @MainActor private static func normalizedIcon(_ source: NSImage) -> NSImage {
+        guard let cg = source.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return source }
+        let bitmap = NSBitmapImageRep(cgImage: cg)
+        var minX = cg.width, minY = cg.height, maxX = -1, maxY = -1
+        for y in 0..<cg.height { for x in 0..<cg.width {
+            if (bitmap.colorAt(x: x, y: y)?.alphaComponent ?? 0) > 0.12 {
+                minX = min(minX, x); minY = min(minY, y); maxX = max(maxX, x); maxY = max(maxY, y)
+            }
+        } }
+        guard maxX >= minX, maxY >= minY,
+              let crop = cg.cropping(to: CGRect(x: minX, y: minY, width: maxX - minX + 1, height: maxY - minY + 1)) else { return source }
+        let scale = 16 / CGFloat(max(crop.width, crop.height))
+        return NSImage(cgImage: crop, size: NSSize(width: CGFloat(crop.width) * scale, height: CGFloat(crop.height) * scale))
+    }
 
 }
 enum QuotaTint {

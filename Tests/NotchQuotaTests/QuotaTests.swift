@@ -69,3 +69,32 @@ final class ProviderSelectionTests: XCTestCase {
         XCTAssertEqual(selection.next(after: .claude), .claude)
     }
 }
+
+final class OutlineTests: XCTestCase {
+    func testPriorityIsIndependentOfSelectedAppAndDetectionOrder() {
+        XCTAssertEqual(ProviderSelection(installed: [.antigravity, .claude, .codex]).outlineProvider, .codex)
+        XCTAssertEqual(ProviderSelection(installed: [.antigravity, .claude]).outlineProvider, .claude)
+        XCTAssertEqual(ProviderSelection(installed: [.antigravity]).outlineProvider, .antigravity)
+        XCTAssertNil(ProviderSelection(installed: []).outlineProvider)
+    }
+    func testOutlineProgressAndNormalScreenFallback() {
+        let points = OutlineGeometry.points(size: CGSize(width: 190, height: 35), hasNotch: true)
+        XCTAssertEqual(points.first?.y, 0)
+        XCTAssertEqual(points.last?.y, 0)
+        XCTAssertTrue(points.allSatisfy { $0.x >= 0 && $0.x <= 190 && $0.y >= 0 && $0.y <= 35 })
+        XCTAssertTrue(OutlineGeometry.trim(points, fraction: 0).isEmpty)
+        XCTAssertTrue(OutlineGeometry.trim(points, fraction: .nan).isEmpty)
+        XCTAssertEqual(OutlineGeometry.trim(points, fraction: 1), points)
+        let half = OutlineGeometry.trim(points, fraction: 0.5)
+        XCTAssertEqual(half.last!.x, 95, accuracy: 0.01)
+        XCTAssertEqual(half.last!.y, 33.5, accuracy: 0.01)
+        let flat = OutlineGeometry.points(size: CGSize(width: 80, height: 4), hasNotch: false)
+        XCTAssertEqual(flat.count, 2)
+        XCTAssertEqual(OutlineGeometry.trim(flat, fraction: 0.5).last?.x, 40)
+    }
+    @MainActor func testIconsShareSmallVisualBounds() {
+        for provider in Provider.allCases {
+            XCTAssertEqual(max(provider.icon.size.width, provider.icon.size.height), 16, accuracy: 0.01)
+        }
+    }
+}

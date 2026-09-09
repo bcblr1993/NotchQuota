@@ -5,6 +5,8 @@ import QuartzCore
 final class AppDelegate: NSObject, NSApplicationDelegate {
     var panel: NotchPanel!
     var quotaView: QuotaView!
+    var outlinePanel: NSPanel!
+    var outlineView: NotchOutlineView!
     var provider = Provider(rawValue: UserDefaults.standard.string(forKey: "provider") ?? "") ?? .codex
     var installed: [Provider] = []
     var visibilityRevision = 0
@@ -44,6 +46,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
         panel.hidesOnDeactivate = false; panel.acceptsMouseMovedEvents = true
         panel.isReleasedWhenClosed = false; panel.title = "NotchQuota"
+        outlinePanel = NSPanel(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        outlinePanel.backgroundColor = .clear; outlinePanel.isOpaque = false; outlinePanel.hasShadow = false
+        outlinePanel.level = panel.level; outlinePanel.collectionBehavior = panel.collectionBehavior
+        outlinePanel.hidesOnDeactivate = false; outlinePanel.ignoresMouseEvents = true
+        outlinePanel.isReleasedWhenClosed = false; outlinePanel.title = "NotchQuota Outline"
+        outlineView = NotchOutlineView(frame: .zero); outlinePanel.contentView = outlineView
         quotaView = QuotaView(frame: .zero); panel.contentView = quotaView
         quotaView.onSwitch = { [weak self] in self?.next() }
         quotaView.onExpand = { [weak self] in self?.toggleExpanded() }
@@ -82,7 +90,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let left = screen.auxiliaryTopLeftArea, let right = screen.auxiliaryTopRightArea, screen.safeAreaInsets.top > 0 { cameraWidth = max(0, right.minX - left.maxX) }
         else { cameraWidth = 0 }
         quotaView?.cameraWidth = cameraWidth; quotaView?.topHeight = topHeight
-        resize()
+        resize(); updateOutline()
     }
     func resize(animated: Bool = false) {
         guard let screen, panel != nil else { return }
@@ -118,7 +126,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         quotaView.provider = provider
         quotaView.nextProviderTitle = installed.count > 1 ? ProviderSelection(installed: installed).next(after: provider)?.title : nil
         quotaView.state = states[provider] ?? DisplayState()
-        resize(animated: animated)
+        resize(animated: animated); updateOutline()
+    }
+    func updateOutline() {
+        guard let screen, outlinePanel != nil else { return }
+        guard !idle.visible, let selected = ProviderSelection(installed: installed).outlineProvider else {
+            outlinePanel.orderOut(nil); return
+        }
+        let width = cameraWidth > 0 ? cameraWidth + 5 : 80
+        let height = cameraWidth > 0 ? topHeight + 3 : 4
+        let frame = NSRect(x: screen.frame.midX - width / 2, y: screen.frame.maxY - height, width: width, height: height)
+        if outlinePanel.frame != frame { outlinePanel.setFrame(frame, display: false) }
+        outlineView.hasNotch = cameraWidth > 0
+        outlineView.state = states[selected] ?? DisplayState()
+        outlineView.needsDisplay = true
+        if !outlinePanel.isVisible { outlinePanel.orderFrontRegardless() }
     }
     func activity() {
         guard !installed.isEmpty, idle.visible else { return }
@@ -143,6 +165,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard !installed.isEmpty else { return }
         visibilityRevision += 1
         idle.interact(at: ProcessInfo.processInfo.systemUptime)
+        outlinePanel.orderOut(nil)
         scheduleIdle()
         if !panel.isVisible { panel.alphaValue = 0; resize(); panel.orderFrontRegardless() }
         NSAnimationContext.runAnimationGroup { context in
@@ -154,6 +177,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func hide() {
         hoverWork?.cancel(); hoverWork = nil; collapseWork?.cancel()
         idle.visible = false
+        updateOutline()
         activeMenu?.cancelTracking()
         idleTimer?.invalidate(); idleTimer = nil
         hiddenPointerInside = revealRect.contains(NSEvent.mouseLocation)
@@ -224,6 +248,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             do { let snapshot = try await reader.fetch(p); states[p] = DisplayState(snapshot: snapshot) }
             catch { var failed = states[p] ?? DisplayState(); failed.loading = false; failed.error = readableError(error); states[p] = failed }
             if p == provider { updateView(animated: true) }
+            else { updateOutline() }
         }
     }
     func readableError(_ error: Error) -> String {
@@ -255,9 +280,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc func quit() { NSApp.terminate(nil) }
     func runUISmoke() {
         let base = ProcessInfo.processInfo.environment["NOTCHQUOTA_SMOKE_DIR"] ?? FileManager.default.temporaryDirectory.path
-        func capture(_ name: String) {
-            guard let rep = quotaView.bitmapImageRepForCachingDisplay(in: quotaView.bounds) else { return }
-            quotaView.cacheDisplay(in: quotaView.bounds, to: rep)
+        func capture(_ name: String, view: NSView? = nil) {
+            let view = view ?? quotaView!
+            guard let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return }
+            view.cacheDisplay(in: view.bounds, to: rep)
             if let data = rep.representation(using: .png, properties: [:]) { try? data.write(to: URL(fileURLWithPath: base).appendingPathComponent(name + ".png")) }
         }
         suppressMotion = true
@@ -275,11 +301,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
             }
             await settle(15.8)
-            check(!panel.isVisible && !idle.visible, "idle 15s")
+            check(!panel.isVisible && !idle.visible && outlinePanel.isVisible, "idle 15s keeps outline")
+            check(outlineView.state.snapshot?.remaining == states[.codex]?.snapshot?.remaining, "outline defaults to Codex")
+            capture("outline-codex", view: outlineView)
             mouseMoved(at: NSPoint(x: revealRect.minX - 100, y: revealRect.minY - 100))
             mouseMoved(at: NSPoint(x: revealRect.midX, y: revealRect.midY))
             await settle()
-            check(panel.isVisible && panel.alphaValue == 1, "hotzone reappear")
+            check(panel.isVisible && panel.alphaValue == 1 && !outlinePanel.isVisible, "hotzone reappear")
             hoverWork?.cancel(); hoverWork = nil
             hide(); await settle(0.05); show(); await settle()
             check(panel.isVisible && idle.visible && panel.alphaValue == 1, "hide/show reversal")
@@ -296,9 +324,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             check(provider == .claude && quotaView.nextProviderTitle == nil, "single app stays selected")
             capture("claude-only")
             smokeInstalled = []; discoverInstalled(); await settle(); show(); await settle()
-            check(!panel.isVisible && !idle.visible && idleTimer == nil, "no apps stays empty")
+            check(!panel.isVisible && !outlinePanel.isVisible && !idle.visible && idleTimer == nil, "no apps stays empty")
             smokeInstalled = [.antigravity]; refreshAll(); await settle()
-            check(!panel.isVisible && !idle.visible, "background discovery stays hidden")
+            check(!panel.isVisible && !idle.visible && outlinePanel.isVisible, "background discovery stays compact")
+            check(outlineView.state.snapshot?.remaining == states[.antigravity]?.snapshot?.remaining, "outline falls back to installed app")
+            capture("outline-fallback", view: outlineView)
             show(); await settle()
             check(panel.isVisible && provider == .antigravity, "new install on reveal")
             print("Compact: \(cameraWidth + (cameraWidth > 0 ? 94 : 100)) × \(topHeight)")
