@@ -231,6 +231,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(.separator())
         let info = NSMenuItem(title: "无操作 15 秒后显示默认额度", action: nil, keyEquivalent: ""); info.isEnabled = false; menu.addItem(info)
         menu.addItem(.separator())
+        let loginState = demo || testMode ? LoginItemState.disabled : LaunchAtLogin.state
+        let login = NSMenuItem(title: loginState.title, action: #selector(toggleLaunchAtLogin), keyEquivalent: "")
+        login.target = self; login.state = loginState.checkmark
+        menu.addItem(login)
+        if loginState == .requiresApproval {
+            let settings = NSMenuItem(title: "在系统设置中允许自动启动…", action: #selector(openLoginSettings), keyEquivalent: "")
+            settings.target = self; menu.addItem(settings)
+        }
+        menu.addItem(.separator())
         let updates = NSMenuItem(title: "下载更新…", action: #selector(openUpdates), keyEquivalent: ""); updates.target = self; menu.addItem(updates)
         let help = NSMenuItem(title: "使用说明 / 反馈问题…", action: #selector(openHelp), keyEquivalent: ""); help.target = self; menu.addItem(help)
         menu.addItem(.separator())
@@ -243,6 +252,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc func manualRest() { rest() }
     @objc func openUpdates() { NSWorkspace.shared.open(URL(string: "https://github.com/bcblr1993/NotchQuota/releases/latest")!) }
     @objc func openHelp() { NSWorkspace.shared.open(URL(string: "https://github.com/bcblr1993/NotchQuota#readme")!) }
+    @objc func toggleLaunchAtLogin() {
+        guard !demo, !testMode else { return }
+        do {
+            try LaunchAtLogin.setEnabled(LaunchAtLogin.state.shouldEnableOnToggle)
+            if LaunchAtLogin.state == .requiresApproval { LaunchAtLogin.openSettings() }
+        } catch {
+            let alert = NSAlert(); alert.messageText = "无法更改开机自动启动"
+            alert.informativeText = error.localizedDescription; alert.addButton(withTitle: "好")
+            alert.runModal()
+        }
+    }
+    @objc func openLoginSettings() { LaunchAtLogin.openSettings() }
     @objc func quit() { NSApp.terminate(nil) }
     func runUISmoke() {
         let base = ProcessInfo.processInfo.environment["NOTCHQUOTA_SMOKE_DIR"] ?? FileManager.default.temporaryDirectory.path
@@ -305,7 +326,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 }
 
-if CommandLine.arguments.contains("--diagnose") {
+if let index = CommandLine.arguments.firstIndex(of: "--login-item") {
+    MainActor.assumeIsolated {
+        let operation = CommandLine.arguments.dropFirst(index + 1).first ?? "status"
+        do {
+            switch operation {
+            case "status": break
+            case "enable": try LaunchAtLogin.setEnabled(true)
+            case "disable": try LaunchAtLogin.setEnabled(false)
+            default: throw QuotaError.message("支持的操作为 status、enable、disable")
+            }
+            print("Login item: \(LaunchAtLogin.state.label)")
+        } catch { print("Login item: ERROR \(error.localizedDescription)"); exit(1) }
+    }
+} else if CommandLine.arguments.contains("--diagnose") {
     let reader = QuotaReader()
     let selected = CommandLine.arguments.dropFirst(2).compactMap(Provider.init(rawValue:))
     let targets = selected.isEmpty ? Provider.allCases : selected

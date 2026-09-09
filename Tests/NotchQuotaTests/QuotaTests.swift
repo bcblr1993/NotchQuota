@@ -83,3 +83,18 @@ final class DefaultProviderTests: XCTestCase {
         }
     }
 }
+
+final class LoginItemTests: XCTestCase {
+    func testEnabledAndPendingHaveDifferentDisplayStates() {
+        XCTAssertEqual(LoginItemState.enabled.checkmark, .on)
+        XCTAssertEqual(LoginItemState.requiresApproval.checkmark, .mixed)
+        XCTAssertEqual(LoginItemState.disabled.checkmark, .off)
+        XCTAssertTrue(LoginItemState.requiresApproval.title.contains("待系统允许"))
+    }
+    func testToggleAllowsDisablingPendingRegistration() {
+        XCTAssertFalse(LoginItemState.enabled.shouldEnableOnToggle)
+        XCTAssertFalse(LoginItemState.requiresApproval.shouldEnableOnToggle)
+        XCTAssertTrue(LoginItemState.disabled.shouldEnableOnToggle)
+        XCTAssertTrue(LoginItemState.unavailable.shouldEnableOnToggle)
+    }
+}

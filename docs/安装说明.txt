@@ -14,3 +14,5 @@ NotchQuota · Apple Silicon
 绿色 >50%，黄色 20–50%，红色 <20%。
 
 项目与帮助：https://github.com/bcblr1993/NotchQuota
+
+需要开机自动启动时，右键刘海区域勾选“开机自动启动”。待系统允许时按菜单入口到系统设置中允许。
