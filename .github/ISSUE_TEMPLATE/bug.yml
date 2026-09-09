@@ -1,0 +1,25 @@
+name: 问题反馈
+description: 额度、显示或安装问题
+title: "[Bug] "
+labels: [bug]
+body:
+  - type: input
+    id: version
+    attributes: {label: NotchQuota 版本}
+    validations: {required: true}
+  - type: input
+    id: environment
+    attributes: {label: macOS 版本和 M 系列芯片型号}
+    validations: {required: true}
+  - type: dropdown
+    id: provider
+    attributes:
+      label: 受影响的功能
+      options: [Codex, Claude, Antigravity, 界面或安装]
+  - type: textarea
+    id: reproduce
+    attributes: {label: 复现步骤和实际行为, description: 请勿上传 Cookie、token、认证文件或个人信息。}
+    validations: {required: true}
+  - type: textarea
+    id: expected
+    attributes: {label: 期望行为与脱敏截图}

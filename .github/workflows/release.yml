@@ -1,0 +1,58 @@
+name: Signed Release
+on:
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  release:
+    runs-on: macos-14
+    timeout-minutes: 30
+    environment: release
+    env:
+      CERTIFICATE_P12_BASE64: ${{ secrets.CERTIFICATE_P12_BASE64 }}
+      CERTIFICATE_PASSWORD: ${{ secrets.CERTIFICATE_PASSWORD }}
+      SIGNING_IDENTITY: ${{ secrets.SIGNING_IDENTITY }}
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+      APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Require signing configuration
+        run: |
+          for variable in CERTIFICATE_P12_BASE64 CERTIFICATE_PASSWORD SIGNING_IDENTITY APPLE_ID APPLE_APP_PASSWORD APPLE_TEAM_ID; do
+            if [ -z "${!variable}" ]; then echo "Missing secret: $variable"; exit 1; fi
+          done
+      - name: Test
+        run: swift test
+      - name: Prepare temporary signing keychain
+        run: |
+          CERT_FILE="$RUNNER_TEMP/signing.p12"
+          KEYCHAIN="$RUNNER_TEMP/release.keychain-db"
+          KEYCHAIN_PASSWORD="$(openssl rand -hex 24)"
+          echo "::add-mask::$KEYCHAIN_PASSWORD"
+          printf '%s' "$CERTIFICATE_P12_BASE64" | base64 --decode > "$CERT_FILE"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security import "$CERT_FILE" -P "$CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN"
+          security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security list-keychain -d user -s "$KEYCHAIN"
+          xcrun notarytool store-credentials NotchQuota-Release --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" --password "$APPLE_APP_PASSWORD" --keychain "$KEYCHAIN"
+          echo "RELEASE_KEYCHAIN=$KEYCHAIN" >> "$GITHUB_ENV"
+      - name: Build and verify
+        run: scripts/build-app.sh && scripts/check-release.sh
+      - name: Package and notarize
+        env:
+          NOTARY_PROFILE: NotchQuota-Release
+        run: scripts/package.sh
+      - name: Publish verified assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION="$(tr -d '\n' < VERSION)"
+          gh release create "v$VERSION" --target "$GITHUB_SHA" --title "NotchQuota $VERSION" --notes-file docs/RELEASE_NOTES.md "dist/NotchQuota-$VERSION-macos-arm64.dmg" dist/SHA256SUMS.txt
+      - name: Remove temporary signing material
+        if: always()
+        run: |
+          if [ -f "$RUNNER_TEMP/release.keychain-db" ]; then security delete-keychain "$RUNNER_TEMP/release.keychain-db"; fi
+          rm -f "$RUNNER_TEMP/signing.p12"

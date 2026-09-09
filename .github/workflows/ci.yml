@@ -1,0 +1,29 @@
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+permissions:
+  contents: read
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  test-build:
+    runs-on: macos-14
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test
+        run: swift test
+      - name: Build Apple Silicon app
+        run: scripts/build-app.sh
+      - name: Verify app layout and signature
+        run: scripts/check-release.sh
+      - name: Archive CI build (not notarized)
+        run: ditto -c -k --keepParent build/NotchQuota.app build/NotchQuota-CI-arm64.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: NotchQuota-CI-arm64-not-notarized
+          path: build/NotchQuota-CI-arm64.zip
+          retention-days: 7

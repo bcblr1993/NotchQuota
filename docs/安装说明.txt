@@ -1,0 +1,16 @@
+NotchQuota · Apple Silicon
+
+1. 将 NotchQuota 拖入 Applications。
+2. 从 Applications 启动 NotchQuota。
+3. 点击屏幕顶部的应用图标切换 Codex / Claude / Antigravity。
+4. 无操作 15 秒后自动隐藏；鼠标移到顶部中央再次显示。
+5. 右键可刷新额度、下载更新或退出。
+
+要求：M 系列芯片、macOS 13+，相应软件之前已经登录。
+登录有效时，无需启动原软件，也不需要额外安装命令行工具。
+系统可能首次询问是否允许读取相应登录钥匙串。
+灰色 — 表示未能读取；悬停/点击数字可查看原因。
+
+绿色 >50%，黄色 20–50%，红色 <20%。
+
+项目与帮助：https://github.com/bcblr1993/NotchQuota
