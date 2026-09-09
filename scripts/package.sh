@@ -26,5 +26,5 @@ if [ -n "${NOTARY_PROFILE:-}" ]; then
 fi
 # App ZIP is useful for local development. Public releases use the notarized DMG.
 ditto -c -k --keepParent "$APP" "$OUT/$NAME.zip"
-(cd "$OUT" && shasum -a 256 "$NAME.dmg" "$NAME.zip" > SHA256SUMS.txt)
+(cd "$OUT" && shasum -a 256 "$NAME.dmg" > SHA256SUMS.txt)
 printf 'Packaged %s\n' "$OUT/$NAME.dmg"

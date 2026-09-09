@@ -1,6 +1,6 @@
 # 0.1.0 验证记录
 
-日期：2026-09-09。
+日期：2026-09-09；本机系统 macOS 26.5.2，Apple Silicon。
 
 已完成：
 
@@ -14,7 +14,7 @@
 - 挂载分发 DMG 后，包内应用识别为 `Notarized Developer ID`；从挂载包执行三个提供商的查询均成功。
 - 本机实际安装到 Applications。交互验证了图标从 Codex → Claude → Antigravity 切换。
 - 安装包约 0.84 MiB，应用约 0.88 MiB。原型稳定空闲采样 CPU 为 0.0%、RSS 约 57 MiB；不同系统和网络阶段会波动。
-- GitHub macOS CI 曾发现 Swift 并发闭包的兼容性错误；修复后以发布提交的 CI 结果为准，运行记录见仓库 Actions。
+- GitHub macOS CI 曾发现 Swift 并发闭包兼容性错误，已修复。修复提交 `dd11410` 的测试、arm64 构建和包校验全部通过：[CI 记录](https://github.com/bcblr1993/NotchQuota/actions/runs/34300030404)。
 
 未完成的覆盖，不能宣称已通过：
 
