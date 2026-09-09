@@ -17,6 +17,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var wakeObserver: NSObjectProtocol?
     var hoverWork: DispatchWorkItem?
     var collapseWork: DispatchWorkItem?
+    var activeMenu: NSMenu?
     var hiddenPointerInside = false
     var screen: NSScreen?
     var topHeight: CGFloat = 30
@@ -45,7 +46,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if demo || testMode { loadDemo() }
         updateView(); show()
         scheduleIdle()
-        refreshTimer = Timer.scheduledTimer(withTimeInterval: 180, repeats: true) { [weak self] _ in Task { @MainActor in self?.refreshAll() } }
+        refreshTimer = Timer.scheduledTimer(withTimeInterval: 180, repeats: true) { [weak self] _ in Task { @MainActor [weak self] in self?.refreshAll() } }
         refreshTimer?.tolerance = 15
         mouseMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.mouseMoved, .leftMouseDragged]) { [weak self] _ in self?.mouseMoved() }
         localMonitor = NSEvent.addLocalMonitorForEvents(matching: [.mouseMoved, .leftMouseDown, .rightMouseDown, .keyDown]) { [weak self] event in
@@ -53,8 +54,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             else { self?.mouseMoved() }
             return event
         }
-        displayObserver = NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main) { [weak self] _ in Task { @MainActor in self?.updateScreen() } }
-        wakeObserver = NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak self] _ in Task { @MainActor in self?.updateScreen(); self?.refreshAll() } }
+        displayObserver = NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main) { [weak self] _ in Task { @MainActor [weak self] in self?.updateScreen() } }
+        wakeObserver = NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak self] _ in Task { @MainActor [weak self] in self?.updateScreen(); self?.refreshAll() } }
         refreshAll()
         if testMode { runUISmoke() }
     }
@@ -113,6 +114,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func hide() {
         hoverWork?.cancel(); hoverWork = nil; collapseWork?.cancel()
         idle.visible = false
+        activeMenu?.cancelTracking()
         idleTimer?.invalidate(); idleTimer = nil
         hiddenPointerInside = revealRect.contains(NSEvent.mouseLocation)
         quotaView.expanded = false
@@ -134,7 +136,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func scheduleIdle() {
         let remaining = max(0.05, IdleState.delay - (ProcessInfo.processInfo.systemUptime - idle.lastInteraction))
         if let timer = idleTimer, timer.isValid { timer.fireDate = Date().addingTimeInterval(remaining); return }
-        idleTimer = Timer.scheduledTimer(withTimeInterval: remaining, repeats: false) { [weak self] _ in Task { @MainActor in self?.tick() } }
+        idleTimer = Timer(timeInterval: remaining, repeats: false) { [weak self] _ in Task { @MainActor [weak self] in self?.tick() } }
+        if let idleTimer { RunLoop.main.add(idleTimer, forMode: .common) }
         idleTimer?.tolerance = 0.1
     }
     func tick() {
@@ -180,7 +183,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let help = NSMenuItem(title: "使用说明 / 反馈问题…", action: #selector(openHelp), keyEquivalent: ""); help.target = self; menu.addItem(help)
         menu.addItem(.separator())
         let quit = NSMenuItem(title: "退出 NotchQuota", action: #selector(quit), keyEquivalent: "q"); quit.target = self; menu.addItem(quit)
+        activeMenu = menu
         NSMenu.popUpContextMenu(menu, with: event, for: quotaView)
+        activeMenu = nil
     }
     @objc func manualRefresh() { activity(); refreshAll() }
     @objc func manualHide() { hide() }
@@ -218,7 +223,8 @@ if CommandLine.arguments.contains("--diagnose") {
         for p in targets {
             do {
                 let snapshot = try await reader.fetch(p)
-                let encoded = try JSONEncoder().encode(snapshot)
+                let encoder = JSONEncoder(); encoder.dateEncodingStrategy = .iso8601
+                let encoded = try encoder.encode(snapshot)
                 print("\(p.rawValue): \(String(decoding: encoded, as: UTF8.self))")
             } catch { print("\(p.rawValue): ERROR \((error as? QuotaError)?.localizedDescription ?? "网络或本地读取失败")") }
         }
