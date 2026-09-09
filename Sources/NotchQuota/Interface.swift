@@ -91,19 +91,22 @@ final class QuotaView: NSView {
         iconButton.toolTip = nextProviderTitle.map { "切换至 \($0)" } ?? provider.title
         iconButton.setAccessibilityLabel(nextProviderTitle.map { "当前 \(provider.title)，切换至 \($0)" } ?? "当前 \(provider.title)")
         quotaButton.title = ""
-        quotaButton.setAccessibilityLabel("\(provider.title) 剩余额度 \(percentage)，显示详情")
-        quotaButton.toolTip = state.error ?? (state.stale ? "上次读取的额度，等待更新" : "剩余额度 · 点击展开")
+        quotaButton.setAccessibilityLabel("\(provider.title) 剩余额度 \(percentage)，\(expanded ? "收起详情" : "显示详情")")
+        quotaButton.toolTip = state.error ?? (state.stale ? "上次读取的额度，等待更新" : (expanded ? "点击收起详情" : "剩余额度 · 点击展开"))
+        layoutButtons()
+        needsDisplay = true
+    }
+    private func layoutButtons() {
         let compactWidth = cameraWidth > 0 ? cameraWidth + 94 : 100
         let x = (bounds.width - compactWidth) / 2
         iconButton.frame = NSRect(x: x + 5, y: (topHeight - 26) / 2, width: 26, height: 26)
         quotaButton.frame = NSRect(x: bounds.width - x - 60, y: 0, width: 55, height: topHeight)
-        needsDisplay = true
     }
     var percentage: String {
         guard let remaining = state.snapshot?.remaining else { return "—" }
         return "\(Int(remaining.rounded()))%"
     }
-    override func layout() { super.layout(); update() }
+    override func layout() { super.layout(); layoutButtons(); needsDisplay = true }
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
         for area in trackingAreas { removeTrackingArea(area) }

@@ -18,14 +18,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var idle = IdleState()
     var idleTimer: Timer?
     var refreshTimer: Timer?
-    var mouseMonitor: Any?
     var localMonitor: Any?
     var displayObserver: NSObjectProtocol?
-    var wakeObserver: NSObjectProtocol?
+    var powerObservers: [NSObjectProtocol] = []
+    var refreshSuspended = false
+    var suppressHoverUntilExit = false
     var hoverWork: DispatchWorkItem?
     var collapseWork: DispatchWorkItem?
     var activeMenu: NSMenu?
-    var hiddenPointerInside = false
     var screen: NSScreen?
     var topHeight: CGFloat = 30
     var cameraWidth: CGFloat = 0
@@ -55,14 +55,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         scheduleIdle()
         refreshTimer = Timer.scheduledTimer(withTimeInterval: 180, repeats: true) { [weak self] _ in Task { @MainActor [weak self] in self?.refreshAll() } }
         refreshTimer?.tolerance = 15
-        mouseMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.mouseMoved, .leftMouseDragged]) { [weak self] _ in self?.mouseMoved() }
-        localMonitor = NSEvent.addLocalMonitorForEvents(matching: [.mouseMoved, .leftMouseDown, .rightMouseDown, .keyDown]) { [weak self] event in
+        localMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown]) { [weak self] event in
             if event.type == .keyDown && event.keyCode == 53 { self?.rest() }
-            else { self?.mouseMoved() }
+            else { self?.activity() }
             return event
         }
         displayObserver = NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main) { [weak self] _ in Task { @MainActor [weak self] in self?.updateScreen() } }
-        wakeObserver = NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak self] _ in Task { @MainActor [weak self] in self?.updateScreen(); self?.refreshAll() } }
+        for name in [NSWorkspace.willSleepNotification, NSWorkspace.screensDidSleepNotification] {
+            powerObservers.append(NSWorkspace.shared.notificationCenter.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                Task { @MainActor [weak self] in self?.refreshSuspended = true }
+            })
+        }
+        for name in [NSWorkspace.didWakeNotification, NSWorkspace.screensDidWakeNotification] {
+            powerObservers.append(NSWorkspace.shared.notificationCenter.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                Task { @MainActor [weak self] in self?.refreshSuspended = false; self?.updateScreen(); self?.refreshAll() }
+            })
+        }
         refreshAll()
         if testMode { runUISmoke() }
     }
@@ -124,7 +132,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         collapseWork?.cancel()
         idle.interact(at: ProcessInfo.processInfo.systemUptime)
         scheduleIdle()
-        guard !quotaView.expanded, hoverWork == nil else { return }
+        guard !quotaView.expanded, !suppressHoverUntilExit, hoverWork == nil else { return }
         let work = DispatchWorkItem { [weak self] in
             guard let self else { return }; self.hoverWork = nil
             if self.idle.active && self.panel.frame.contains(NSEvent.mouseLocation) { self.quotaView.expanded = true; self.resize(animated: true) }
@@ -132,6 +140,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         hoverWork = work; DispatchQueue.main.asyncAfter(deadline: .now() + 0.55, execute: work)
     }
     func leave() {
+        suppressHoverUntilExit = false
         hoverWork?.cancel(); hoverWork = nil
         collapseWork?.cancel()
         let work = DispatchWorkItem { [weak self] in self?.quotaView.expanded = false; self?.resize(animated: true) }
@@ -164,20 +173,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         panel.alphaValue = 1
         if !panel.isVisible { panel.orderFrontRegardless() }
     }
-    var revealRect: NSRect {
-        guard let screen else { return .zero }
-        let width = max(110, cameraWidth + 94)
-        return NSRect(x: screen.frame.midX - width / 2, y: screen.frame.maxY - topHeight - 3, width: width, height: topHeight + 3)
-    }
-    func mouseMoved(at point: NSPoint? = nil) {
-        guard !testMode || point != nil else { return }
-        let position = point ?? NSEvent.mouseLocation
-        if !panel.isVisible {
-            let inside = revealRect.contains(position)
-            if inside && !hiddenPointerInside { show(); activity() }
-            hiddenPointerInside = inside
-        } else if panel.frame.contains(position) { activity() }
-    }
     func scheduleIdle() {
         guard idle.active, !installed.isEmpty else { return }
         let remaining = max(0.05, IdleState.delay - (ProcessInfo.processInfo.systemUptime - idle.lastInteraction))
@@ -203,11 +198,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
     func toggleExpanded() {
         hoverWork?.cancel(); hoverWork = nil
-        quotaView.expanded.toggle(); resize(animated: true)
+        quotaView.expanded.toggle()
+        suppressHoverUntilExit = !quotaView.expanded
+        resize(animated: true)
     }
-    func refreshAll() { discoverInstalled(); for provider in installed { refresh(provider) } }
+    func refreshAll() {
+        guard !refreshSuspended else { return }
+        discoverInstalled(); for provider in installed { refresh(provider) }
+    }
     func refresh(_ p: Provider) {
-        guard installed.contains(p), !demo, !testMode, states[p]?.loading != true else { return }
+        guard !refreshSuspended, installed.contains(p), !demo, !testMode, states[p]?.loading != true else { return }
         if let last = lastAttempt[p], Date().timeIntervalSince(last) < 30 { return }
         lastAttempt[p] = Date(); var state = states[p] ?? DisplayState(); state.loading = true; states[p] = state
         if p == provider { updateView(animated: true) }
@@ -274,7 +274,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             states[.codex] = DisplayState(snapshot: Snapshot(windows: [.init(id: "update", label: "每周", remaining: 59)]))
             updateView(); await settle()
             check(quotaView.percentage == "59%" && !idle.active && idle.lastInteraction == interactionTime && !quotaView.expanded, "background update stays compact")
-            mouseMoved(at: NSPoint(x: panel.frame.midX, y: panel.frame.midY))
+            activity()
             check(idle.active, "compact view remains interactive")
             hoverWork?.cancel(); hoverWork = nil
             toggleExpanded(); await settle(0.08)
@@ -282,14 +282,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             await settle(); rest(); await settle()
             check(panel.isVisible && abs(panel.frame.height - topHeight) < 1, "rest collapses without hiding")
             check(abs(panel.frame.maxY - (screen?.frame.maxY ?? 0)) < 1, "top anchor")
-            show(); next(); check(provider == .claude, "click switches app")
+            show(); toggleExpanded(); await settle(); toggleExpanded(); await settle(); activity()
+            check(!quotaView.expanded && hoverWork == nil, "manual collapse suppresses immediate hover")
+            leave(); check(!suppressHoverUntilExit, "pointer exit restores hover")
+            collapseWork?.cancel()
+            next(); check(provider == .claude, "click switches app")
             rest(); await settle(); check(provider == .codex, "rest resets priority")
             smokeInstalled = [.claude]; discoverInstalled(); next(); await settle()
             check(provider == .claude && quotaView.nextProviderTitle == nil && panel.isVisible, "single app stays selected")
             capture("claude-only")
             smokeInstalled = []; discoverInstalled(); await settle(); show(); await settle()
             check(!panel.isVisible && !idle.active && idleTimer == nil, "no apps stays empty")
-            smokeInstalled = [.antigravity]; refreshAll(); await settle()
+            smokeInstalled = [.antigravity]; refreshSuspended = true; refreshAll()
+            check(installed.isEmpty && !panel.isVisible, "sleep suspends refresh work")
+            refreshSuspended = false; refreshAll(); await settle()
             check(panel.isVisible && provider == .antigravity && !quotaView.expanded && !idle.active, "new install shows compact fallback")
             check(NSApp.windows.filter { $0.isVisible }.count == 1, "only one window and no outline")
             print("Compact: \(cameraWidth + (cameraWidth > 0 ? 94 : 100)) × \(topHeight)")
