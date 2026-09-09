@@ -31,3 +31,26 @@
 - 屏幕/系统休眠停止新额度查询；恢复后按原有间隔保护尝试更新。
 
 长期趋势应保留原始本地 JSONL，不能凭单次 0.0% 快照宣称零占用或没有泄漏。
+
+## 可重复的动画回归（0.1.6 后续测试补充）
+
+`scripts/build-app.sh` 后执行 `scripts/test-animation.sh`。仅运行构建目录中的模拟应用，不替换安装版、不访问账户或网络。约 200 秒完成，250 秒看门狗兜底。需要短压力场景时，可直接运行构建目录可执行文件并传入 `--animation-test --interactions-only`（跳过真实三分钟轮换等待，不能替代完整测试）。请让测试窗口保持可见、避免主动操作测试窗口。启用减少动态效果或低电量模式时，正常动画覆盖检查会明确失败，不把未运行的动画算通过。
+
+覆盖真实 60 秒定时器的三次轮换、12 轮展开/切换/收起、动画中模拟额度结果到达、快速反向操作、交互暂停、模拟休眠/唤醒、减少动态效果路径、单应用与空安装情况。测试日志只含场景名、耗时和断言结果。模拟休眠检查不等同于真实机器睡眠恢复；模拟结果到达不等同于在线网络端到端验证。
+
+### 帧分析
+
+先 `xcrun xctrace list templates` / `list instruments` 确认可用工具。对测试进程的明确 PID 使用 `Animation Hitches` 模板短采样，避免按同名应用启动导致选错安装副本。轨迹保存可能比采样本身慢，临时文件可能很大；不要作为常驻采样器运行。不要在 Instruments 运行时将资源数字作为无分析器干扰的基准。
+
+导出指定表（不要输出整个 TOC，其中可能包含进程环境变量）：
+
+```sh
+xcrun xctrace export --input "$TRACE" --xpath '/trace-toc/run[@number="1"]/data/table[@schema="hitches"]' --output "$OUT/hitches.xml"
+xcrun xctrace export --input "$TRACE" --xpath '/trace-toc/run[@number="1"]/data/table[@schema="hitches-updates"]' --output "$OUT/updates.xml"
+python3 scripts/summarize-animation.py "$OUT" --pid "$TEST_PID"
+PYTHONDONTWRITEBYTECODE=1 python3 scripts/test-animation-summary.py
+```
+
+只统计目标 PID。只有全桌面的 frame-lifetimes，而没有目标应用 updates 时，结果必须为 inconclusive；空 hitches 表不能证明零掉帧。显示器 vsync、主线程定时器、几何中间帧和 FPS 均值也不能替代逐帧呈现证据。原始 trace 只留本机，分享前仅导出脱敏统计，不提交仓库。
+
+2026-09-09 本机工具限制：`Time Profiler` 加 `Core Animation FPS` 实际报错 “Disabled because macOS does not have an FPS metric for Core Animation.” 不再用该项作验收。`Animation Hitches` 在交互轨迹中能导出目标 PID 的更新和卡顿，因此用该项作卡顿证据；不要承诺一个未经测量的 60/120 FPS 数字。分析方法参见 [Apple：Understanding hitches in your app](https://developer.apple.com/documentation/xcode/understanding-hitches-in-your-app)。

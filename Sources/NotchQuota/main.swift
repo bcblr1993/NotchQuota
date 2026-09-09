@@ -31,7 +31,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var topHeight: CGFloat = 30
     var cameraWidth: CGFloat = 0
     var demo = CommandLine.arguments.contains("--demo")
-    let testMode = CommandLine.arguments.contains("--ui-smoke")
+    let animationTestMode = CommandLine.arguments.contains("--animation-test")
+    var testMode: Bool { animationTestMode || CommandLine.arguments.contains("--ui-smoke") }
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
         if !demo && !testMode {
@@ -73,7 +74,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             })
         }
         refreshAll()
-        if testMode { runUISmoke() }
+        if animationTestMode { runAnimationTest() }
+        else if testMode { runUISmoke() }
     }
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool { show(); return true }
     func loadDemo() {
