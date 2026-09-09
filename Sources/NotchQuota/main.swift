@@ -18,6 +18,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var idle = IdleState()
     var idleTimer: Timer?
     var refreshTimer: Timer?
+    var rotationTimer: Timer?
     var localMonitor: Any?
     var displayObserver: NSObjectProtocol?
     var powerObservers: [NSObjectProtocol] = []
@@ -63,12 +64,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         displayObserver = NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main) { [weak self] _ in Task { @MainActor [weak self] in self?.updateScreen() } }
         for name in [NSWorkspace.willSleepNotification, NSWorkspace.screensDidSleepNotification] {
             powerObservers.append(NSWorkspace.shared.notificationCenter.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
-                Task { @MainActor [weak self] in self?.refreshSuspended = true }
+                Task { @MainActor [weak self] in self?.refreshSuspended = true; self?.scheduleRotation() }
             })
         }
         for name in [NSWorkspace.didWakeNotification, NSWorkspace.screensDidWakeNotification] {
             powerObservers.append(NSWorkspace.shared.notificationCenter.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
-                Task { @MainActor [weak self] in self?.refreshSuspended = false; self?.updateScreen(); self?.refreshAll() }
+                Task { @MainActor [weak self] in self?.refreshSuspended = false; self?.updateScreen(); self?.refreshAll(); self?.scheduleRotation() }
             })
         }
         refreshAll()
@@ -117,6 +118,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
         installed = detected
+        scheduleRotation()
         if let selected = ProviderSelection(installed: installed).selected(preferred: provider) { provider = selected }
         if installed.isEmpty || !idle.active { rest() }
         updateView()
@@ -165,10 +167,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         activeMenu?.cancelTracking()
         idleTimer?.invalidate(); idleTimer = nil
         quotaView.expanded = false
-        guard let preferred = ProviderSelection(installed: installed).defaultProvider else {
+        guard !installed.isEmpty else {
             panel.orderOut(nil); return
         }
-        provider = preferred
         updateView(animated: true)
         panel.alphaValue = 1
         if !panel.isVisible { panel.orderFrontRegardless() }
@@ -185,16 +186,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if idle.tick(at: ProcessInfo.processInfo.systemUptime) { rest() }
         else if idle.active { scheduleIdle() }
     }
+    /// One low-frequency timer; automatic rotation only displays cached readings.
+    func scheduleRotation() {
+        rotationTimer?.invalidate(); rotationTimer = nil
+        guard installed.count > 1, !refreshSuspended else { return }
+        rotationTimer = Timer(timeInterval: 60, repeats: true) { [weak self] _ in
+            Task { @MainActor [weak self] in self?.rotateAutomatically() }
+        }
+        rotationTimer?.tolerance = 1
+        if let rotationTimer { RunLoop.main.add(rotationTimer, forMode: .common) }
+    }
+    func rotateAutomatically() {
+        guard !refreshSuspended, !idle.active, !quotaView.expanded, activeMenu == nil else { return }
+        switchProvider()
+    }
     func next() {
+        switchProvider()
+        scheduleRotation()
+        refresh(provider)
+    }
+    func switchProvider() {
         guard installed.count > 1, let next = ProviderSelection(installed: installed).next(after: provider) else { return }
         if panel.isVisible && motionDuration > 0 {
             let transition = CATransition()
-            transition.type = .fade; transition.duration = motionDuration
-            transition.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            transition.type = .fade; transition.duration = 0.38
+            transition.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
             quotaView.layer?.add(transition, forKey: "providerSwitch")
         }
         provider = next
-        updateView(animated: true); refresh(provider)
+        updateView(animated: true)
     }
     func toggleExpanded() {
         hoverWork?.cancel(); hoverWork = nil
@@ -227,9 +247,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func menu(_ event: NSEvent) {
         let menu = NSMenu()
         let refresh = NSMenuItem(title: "刷新额度", action: #selector(manualRefresh), keyEquivalent: "r"); refresh.target = self; menu.addItem(refresh)
-        let hide = NSMenuItem(title: "收起并显示默认额度", action: #selector(manualRest), keyEquivalent: "h"); hide.target = self; menu.addItem(hide)
+        let hide = NSMenuItem(title: "收起详情", action: #selector(manualRest), keyEquivalent: "h"); hide.target = self; menu.addItem(hide)
         menu.addItem(.separator())
-        let info = NSMenuItem(title: "无操作 15 秒后显示默认额度", action: nil, keyEquivalent: ""); info.isEnabled = false; menu.addItem(info)
+        let info = NSMenuItem(title: "每分钟轮换 · 无操作 15 秒收起详情", action: nil, keyEquivalent: ""); info.isEnabled = false; menu.addItem(info)
         menu.addItem(.separator())
         let loginState = demo || testMode ? LoginItemState.disabled : LaunchAtLogin.state
         let login = NSMenuItem(title: loginState.title, action: #selector(toggleLaunchAtLogin), keyEquivalent: "")
@@ -277,7 +297,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         provider = .codex; updateView(); capture("compact")
         quotaView.expanded = true; resize(); capture("codex")
         next(); capture("claude"); next(); capture("antigravity")
-        quotaView.expanded = false; resize(); suppressMotion = false; show()
+        quotaView.expanded = false; provider = .codex; resize(); suppressMotion = false; show()
         Task { @MainActor in
             var failures = 0
             func check(_ condition: Bool, _ name: String) {
@@ -308,9 +328,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             leave(); check(!suppressHoverUntilExit, "pointer exit restores hover")
             collapseWork?.cancel()
             next(); check(provider == .claude, "click switches app")
-            rest(); await settle(); check(provider == .codex, "rest resets priority")
+            rest(); await settle(); check(provider == .claude, "rest preserves current provider")
+            check(abs((rotationTimer?.timeInterval ?? 0) - 60) < 0.01, "rotation interval is 60 seconds")
+            let attempts = lastAttempt
+            rotateAutomatically(); await settle(); check(provider == .antigravity, "automatic rotation advances")
+            capture("rotation-antigravity")
+            rotateAutomatically(); await settle(); check(provider == .codex, "automatic rotation wraps")
+            check(lastAttempt == attempts && !idle.active && !quotaView.expanded, "rotation does not query or expand")
+            refreshSuspended = true; rotateAutomatically(); check(provider == .codex, "sleep pauses rotation")
+            refreshSuspended = false
+            activity(); rotateAutomatically(); check(provider == .codex, "interaction pauses rotation")
+            rest()
             smokeInstalled = [.claude]; discoverInstalled(); next(); await settle()
-            check(provider == .claude && quotaView.nextProviderTitle == nil && panel.isVisible, "single app stays selected")
+            check(provider == .claude && rotationTimer == nil && quotaView.nextProviderTitle == nil && panel.isVisible, "single app stays selected")
             capture("claude-only")
             smokeInstalled = []; discoverInstalled(); await settle(); show(); await settle()
             check(!panel.isVisible && !idle.active && idleTimer == nil, "no apps stays empty")
