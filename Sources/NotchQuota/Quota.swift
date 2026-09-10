@@ -6,6 +6,14 @@ enum Provider: String, CaseIterable, Codable {
     var title: String { switch self { case .codex: return "Codex"; case .claude: return "Claude"; case .antigravity: return "Antigravity" } }
     var next: Provider { Self.allCases[(Self.allCases.firstIndex(of: self)! + 1) % Self.allCases.count] }
 }
+/// Keep at least one installed app accessible so its menu can change preferences.
+enum ProviderVisibility {
+    static func selected(installed: [Provider], excluded: Set<Provider>) -> [Provider] {
+        let ordered = Provider.allCases.filter(installed.contains)
+        let selected = ordered.filter { !excluded.contains($0) }
+        return selected.isEmpty ? Array(ordered.prefix(1)) : selected
+    }
+}
 /// Selection is independent of login state and whether an installed app is running.
 struct ProviderSelection {
     var installed: [Provider]

@@ -7,6 +7,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var quotaView: QuotaView!
     var provider: Provider = .codex
     var installed: [Provider] = []
+    var detectedApps: [Provider] = []
+    var excludedProviders: Set<Provider> = []
+    var automaticRotation = true
     var suppressMotion = false
     var smokeInstalled: [Provider]?
     var motionDuration: TimeInterval {
@@ -58,6 +61,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.quotaView.update()
         }
         if !demo && !testMode { appUpdates.start() }
+        if !demo && !testMode {
+            excludedProviders = Set((UserDefaults.standard.stringArray(forKey: "excludedProviders") ?? []).compactMap(Provider.init(rawValue:)))
+            automaticRotation = UserDefaults.standard.object(forKey: "automaticRotation") as? Bool ?? true
+        }
         updateScreen()
         if demo || testMode { loadDemo() }
         discoverInstalled(); updateView(); show()
@@ -121,7 +128,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         } else { panel.setFrame(target, display: panel.isVisible) }
     }
     func discoverInstalled() {
-        let detected = testMode ? (smokeInstalled ?? Provider.allCases) : demo ? Provider.allCases : Provider.allCases.filter { Installation.app($0.title) != nil }
+        let candidates = testMode ? (smokeInstalled ?? Provider.allCases) : demo ? Provider.allCases : Provider.allCases.filter { Installation.app($0.title) != nil }
+        detectedApps = candidates
+        let selected = ProviderVisibility.selected(installed: candidates, excluded: excludedProviders)
+        // Keep one installed app accessible if the previously selected app was removed.
+        if let fallback = selected.first, excludedProviders.remove(fallback) != nil { saveProviderPreferences() }
+        let detected = selected
         guard detected != installed else {
             if detected.isEmpty { idle.active = false }
             return
@@ -198,7 +210,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// One low-frequency timer; automatic rotation only displays cached readings.
     func scheduleRotation() {
         rotationTimer?.invalidate(); rotationTimer = nil
-        guard installed.count > 1, !refreshSuspended else { return }
+        guard automaticRotation, installed.count > 1, !refreshSuspended else { return }
         rotationTimer = Timer(timeInterval: 60, repeats: true) { [weak self] _ in
             Task { @MainActor [weak self] in self?.rotateAutomatically() }
         }
@@ -206,7 +218,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let rotationTimer { RunLoop.main.add(rotationTimer, forMode: .common) }
     }
     func rotateAutomatically() {
-        guard !refreshSuspended, !idle.active, !quotaView.expanded, activeMenu == nil else { return }
+        guard automaticRotation, !refreshSuspended, !idle.active, !quotaView.expanded, activeMenu == nil else { return }
         switchProvider()
     }
     func next() {
@@ -258,7 +270,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let refresh = NSMenuItem(title: "刷新额度", action: #selector(manualRefresh), keyEquivalent: "r"); refresh.target = self; menu.addItem(refresh)
         let hide = NSMenuItem(title: "收起详情", action: #selector(manualRest), keyEquivalent: "h"); hide.target = self; menu.addItem(hide)
         menu.addItem(.separator())
-        let info = NSMenuItem(title: "每分钟轮换 · 无操作 15 秒收起详情", action: nil, keyEquivalent: ""); info.isEnabled = false; menu.addItem(info)
+        let rotation = NSMenuItem(title: "自动轮换（每分钟）", action: #selector(toggleAutomaticRotation), keyEquivalent: "")
+        rotation.target = self; rotation.state = automaticRotation ? .on : .off; menu.addItem(rotation)
+        let choices = NSMenu()
+        choices.autoenablesItems = false
+        for candidate in detectedApps {
+            let item = NSMenuItem(title: candidate.title, action: #selector(toggleProviderVisibility(_:)), keyEquivalent: "")
+            item.target = self; item.representedObject = candidate.rawValue
+            item.state = installed.contains(candidate) ? .on : .off
+            item.isEnabled = !installed.contains(candidate) || installed.count > 1
+            choices.addItem(item)
+        }
+        let selection = NSMenuItem(title: "显示的应用", action: nil, keyEquivalent: "")
+        selection.submenu = choices; menu.addItem(selection)
+        let info = NSMenuItem(title: "无操作 15 秒收起详情", action: nil, keyEquivalent: ""); info.isEnabled = false; menu.addItem(info)
         menu.addItem(.separator())
         let loginState = demo || testMode ? LoginItemState.disabled : LaunchAtLogin.state
         let login = NSMenuItem(title: loginState.title, action: #selector(toggleLaunchAtLogin), keyEquivalent: "")
@@ -283,6 +308,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         activeMenu = menu
         NSMenu.popUpContextMenu(menu, with: event, for: quotaView)
         activeMenu = nil
+    }
+    func saveProviderPreferences() {
+        guard !demo && !testMode else { return }
+        UserDefaults.standard.set(excludedProviders.map(\.rawValue).sorted(), forKey: "excludedProviders")
+        UserDefaults.standard.set(automaticRotation, forKey: "automaticRotation")
+    }
+    @objc func toggleAutomaticRotation() {
+        automaticRotation.toggle(); saveProviderPreferences(); scheduleRotation()
+    }
+    @objc func toggleProviderVisibility(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String, let candidate = Provider(rawValue: raw) else { return }
+        guard !installed.contains(candidate) || installed.count > 1 else { return }
+        if !excludedProviders.insert(candidate).inserted { excludedProviders.remove(candidate) }
+        saveProviderPreferences(); discoverInstalled(); scheduleRotation()
     }
     @objc func manualRefresh() { activity(); refreshAll() }
     @objc func manualRest() { rest() }
@@ -365,6 +404,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             refreshSuspended = false
             activity(); rotateAutomatically(); check(provider == .codex, "interaction pauses rotation")
             rest()
+            excludedProviders = [.claude, .antigravity]; discoverInstalled(); rest()
+            rotateAutomatically(); next(); await settle()
+            check(installed == [.codex] && provider == .codex && rotationTimer == nil, "manual Codex selection stops rotation")
+            excludedProviders = []; discoverInstalled(); rest()
+            automaticRotation = false; scheduleRotation(); let fixed = provider; rotateAutomatically()
+            check(provider == fixed && rotationTimer == nil, "rotation preference disables timer")
+            automaticRotation = true; scheduleRotation()
+            check(rotationTimer != nil, "rotation preference restores timer")
             smokeInstalled = [.claude]; discoverInstalled(); next(); await settle()
             check(provider == .claude && rotationTimer == nil && quotaView.nextProviderTitle == nil && panel.isVisible, "single app stays selected")
             capture("claude-only")
