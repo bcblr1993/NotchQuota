@@ -28,3 +28,5 @@ fi
 ditto -c -k --keepParent "$APP" "$OUT/$NAME.zip"
 (cd "$OUT" && shasum -a 256 "$NAME.dmg" > SHA256SUMS.txt)
 printf 'Packaged %s\n' "$OUT/$NAME.dmg"
+
+if [ -n "${NOTARY_PROFILE:-}" ]; then scripts/generate-appcast.sh; fi

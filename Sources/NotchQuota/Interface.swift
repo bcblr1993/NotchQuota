@@ -62,22 +62,29 @@ final class QuotaView: NSView {
     var topHeight: CGFloat = 32
     var cameraWidth: CGFloat = 0
     var expanded = false
+    var updateVersion: String?
+    var onUpdate: (() -> Void)?
     var onSwitch: (() -> Void)?
     var onExpand: (() -> Void)?
     var onActivity: (() -> Void)?
     var onLeave: (() -> Void)?
     var onContextMenu: ((NSEvent) -> Void)?
+    private let updateButton = QuotaButton()
     private let iconButton = QuotaButton()
     private let quotaButton = QuotaButton()
     override var isFlipped: Bool { true }
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         wantsLayer = true
-        for button in [iconButton, quotaButton] {
+        for button in [iconButton, quotaButton, updateButton] {
             button.isBordered = false; button.bezelStyle = .regularSquare
             button.target = self; button.focusRingType = .exterior
             addSubview(button)
         }
+        updateButton.image = NSImage(systemSymbolName: "arrow.down.circle.fill", accessibilityDescription: "可更新")
+        updateButton.contentTintColor = .systemBlue
+        updateButton.imageScaling = .scaleProportionallyDown
+        updateButton.action = #selector(showUpdate)
         iconButton.imagePosition = .imageOnly
         iconButton.imageScaling = .scaleProportionallyDown
         iconButton.action = #selector(nextProvider)
@@ -87,6 +94,9 @@ final class QuotaView: NSView {
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
     func update() {
+        updateButton.isHidden = updateVersion == nil
+        updateButton.toolTip = updateVersion.map { "新版本 \($0) 可更新，点击下载安装" }
+        updateButton.setAccessibilityLabel(updateButton.toolTip ?? "检查更新")
         iconButton.image = provider.icon
         iconButton.toolTip = nextProviderTitle.map { "切换至 \($0)" } ?? provider.title
         iconButton.setAccessibilityLabel(nextProviderTitle.map { "当前 \(provider.title)，切换至 \($0)" } ?? "当前 \(provider.title)")
@@ -100,6 +110,7 @@ final class QuotaView: NSView {
         let compactWidth = cameraWidth > 0 ? cameraWidth + 94 : 100
         let x = (bounds.width - compactWidth) / 2
         iconButton.frame = NSRect(x: x + 5, y: (topHeight - 26) / 2, width: 26, height: 26)
+        updateButton.frame = NSRect(x: x + 32, y: (topHeight - 12) / 2, width: 12, height: 12)
         quotaButton.frame = NSRect(x: bounds.width - x - 60, y: 0, width: 55, height: topHeight)
     }
     var percentage: String {
@@ -118,6 +129,7 @@ final class QuotaView: NSView {
     override func mouseExited(with event: NSEvent) { onLeave?() }
     override func rightMouseDown(with event: NSEvent) { onActivity?(); onContextMenu?(event) }
     override func mouseDown(with event: NSEvent) { onActivity?() }
+    @objc private func showUpdate() { onUpdate?() }
     @objc private func nextProvider() { onActivity?(); onSwitch?() }
     @objc private func toggleDetails() { onActivity?(); onExpand?() }
     private func text(_ value: String, x: CGFloat, y: CGFloat, size: CGFloat = 11, color: NSColor = .white, weight: NSFont.Weight = .regular, width: CGFloat? = nil, align: NSTextAlignment = .left) {

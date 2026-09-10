@@ -9,6 +9,7 @@ jobs:
     timeout-minutes: 30
     environment: release
     env:
+      SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
       CERTIFICATE_P12_BASE64: ${{ secrets.CERTIFICATE_P12_BASE64 }}
       CERTIFICATE_PASSWORD: ${{ secrets.CERTIFICATE_PASSWORD }}
       SIGNING_IDENTITY: ${{ secrets.SIGNING_IDENTITY }}
@@ -19,7 +20,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Require signing configuration
         run: |
-          for variable in CERTIFICATE_P12_BASE64 CERTIFICATE_PASSWORD SIGNING_IDENTITY APPLE_ID APPLE_APP_PASSWORD APPLE_TEAM_ID; do
+          for variable in SPARKLE_PRIVATE_KEY CERTIFICATE_P12_BASE64 CERTIFICATE_PASSWORD SIGNING_IDENTITY APPLE_ID APPLE_APP_PASSWORD APPLE_TEAM_ID; do
             if [ -z "${!variable}" ]; then echo "Missing secret: $variable"; exit 1; fi
           done
       - name: Test
@@ -50,7 +51,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           VERSION="$(tr -d '\n' < VERSION)"
-          gh release create "v$VERSION" --target "$GITHUB_SHA" --title "NotchQuota $VERSION" --notes-file docs/RELEASE_NOTES.md "dist/NotchQuota-$VERSION-macos-arm64.dmg" dist/SHA256SUMS.txt
+          gh release create "v$VERSION" --target "$GITHUB_SHA" --title "NotchQuota $VERSION" --notes-file docs/RELEASE_NOTES.md "dist/NotchQuota-$VERSION-macos-arm64.dmg" dist/SHA256SUMS.txt dist/appcast.xml
       - name: Remove temporary signing material
         if: always()
         run: |

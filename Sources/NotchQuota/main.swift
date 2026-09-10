@@ -15,6 +15,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var states: [Provider: DisplayState] = [:]
     var lastAttempt: [Provider: Date] = [:]
     let reader = QuotaReader()
+    let appUpdates = AppUpdates()
     var idle = IdleState()
     var idleTimer: Timer?
     var refreshTimer: Timer?
@@ -51,6 +52,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         quotaView.onActivity = { [weak self] in if self?.testMode == false { self?.activity() } }
         quotaView.onLeave = { [weak self] in if self?.testMode == false { self?.leave() } }
         quotaView.onContextMenu = { [weak self] event in self?.menu(event) }
+        quotaView.onUpdate = { [weak self] in self?.openUpdates() }
+        appUpdates.onChange = { [weak self] version in
+            self?.quotaView.updateVersion = version
+            self?.quotaView.update()
+        }
+        if !demo && !testMode { appUpdates.start() }
         updateScreen()
         if demo || testMode { loadDemo() }
         discoverInstalled(); updateView(); show()
@@ -247,7 +254,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return "暂时无法读取额度"
     }
     func menu(_ event: NSEvent) {
-        let menu = NSMenu()
+        let menu = NSMenu(); menu.autoenablesItems = false
         let refresh = NSMenuItem(title: "刷新额度", action: #selector(manualRefresh), keyEquivalent: "r"); refresh.target = self; menu.addItem(refresh)
         let hide = NSMenuItem(title: "收起详情", action: #selector(manualRest), keyEquivalent: "h"); hide.target = self; menu.addItem(hide)
         menu.addItem(.separator())
@@ -262,7 +269,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             settings.target = self; menu.addItem(settings)
         }
         menu.addItem(.separator())
-        let updates = NSMenuItem(title: "下载更新…", action: #selector(openUpdates), keyEquivalent: ""); updates.target = self; menu.addItem(updates)
+        let currentVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "未知"
+        let versionInfo = NSMenuItem(title: "当前版本：\(currentVersion)", action: nil, keyEquivalent: "")
+        versionInfo.isEnabled = false; menu.addItem(versionInfo)
+        let updates = NSMenuItem(title: appUpdates.menuTitle, action: #selector(openUpdates), keyEquivalent: ""); updates.target = self; updates.isEnabled = !demo && !testMode && appUpdates.canCheck; menu.addItem(updates)
+        let automatic = NSMenuItem(title: "自动检查新版本（每天）", action: #selector(toggleUpdateChecks), keyEquivalent: "")
+        automatic.target = self; automatic.state = appUpdates.automaticallyChecks ? .on : .off
+        automatic.isEnabled = !demo && !testMode
+        menu.addItem(automatic)
         let help = NSMenuItem(title: "使用说明 / 反馈问题…", action: #selector(openHelp), keyEquivalent: ""); help.target = self; menu.addItem(help)
         menu.addItem(.separator())
         let quit = NSMenuItem(title: "退出 NotchQuota", action: #selector(quit), keyEquivalent: "q"); quit.target = self; menu.addItem(quit)
@@ -272,7 +286,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
     @objc func manualRefresh() { activity(); refreshAll() }
     @objc func manualRest() { rest() }
-    @objc func openUpdates() { NSWorkspace.shared.open(URL(string: "https://github.com/bcblr1993/NotchQuota/releases/latest")!) }
+    @objc func openUpdates() {
+        guard !demo, !testMode else { return }
+        activeMenu?.cancelTracking()
+        appUpdates.check()
+    }
+    @objc func toggleUpdateChecks() { guard !demo, !testMode else { return }; appUpdates.toggleAutomaticChecks() }
     @objc func openHelp() { NSWorkspace.shared.open(URL(string: "https://github.com/bcblr1993/NotchQuota#readme")!) }
     @objc func toggleLaunchAtLogin() {
         guard !demo, !testMode else { return }
@@ -312,6 +331,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             await settle(15.8)
             check(panel.isVisible && !idle.active && !quotaView.expanded && provider == .codex, "idle keeps default compact quota")
             check(idleTimer == nil, "idle timer stops")
+            let compactFrame = panel.frame
+            quotaView.updateVersion = "0.1.8"; quotaView.update(); capture("update-available")
+            check(panel.frame == compactFrame && !quotaView.expanded, "update reminder keeps compact size")
+            check(!appUpdates.canCheck, "smoke never starts real updater")
+            quotaView.updateVersion = nil; quotaView.update()
             capture("standby-codex")
             let interactionTime = idle.lastInteraction
             states[.codex] = DisplayState(snapshot: Snapshot(windows: [.init(id: "update", label: "每周", remaining: 59)]))

@@ -32,7 +32,7 @@ xcrun notarytool log SUBMISSION_ID --keychain-profile "$NOTARY_PROFILE"
 VERSION=$(cat VERSION)
 gh release create "v$VERSION" --title "NotchQuota $VERSION" \
   --notes-file docs/RELEASE_NOTES.md \
-  "dist/NotchQuota-$VERSION-macos-arm64.dmg" dist/SHA256SUMS.txt
+  "dist/NotchQuota-$VERSION-macos-arm64.dmg" dist/SHA256SUMS.txt dist/appcast.xml
 ```
 
 ## GitHub 自动签名发布
@@ -41,6 +41,7 @@ gh release create "v$VERSION" --title "NotchQuota $VERSION" \
 
 - `CERTIFICATE_P12_BASE64`、`CERTIFICATE_PASSWORD`、`SIGNING_IDENTITY`
 - `APPLE_ID`、`APPLE_APP_PASSWORD`、`APPLE_TEAM_ID`
+- `SPARKLE_PRIVATE_KEY`（更新签名，与应用内公钥对应）
 
 缺少任何一个就会失败，不回退发布未签名安装包。证书仅导入临时钥匙串，并在最后删除。建议给 `release` environment 设置维护者审批。
 
@@ -55,3 +56,13 @@ gh release create "v$VERSION" --title "NotchQuota $VERSION" \
 - 无刘海屏、刘海屏、多屏幕、休眠唤醒。
 - 断网、登录失效、接口返回空/缺字段时显示明确状态。
 - 实测范围写入验证记录，不宣称未测的平台或账号已经通过。
+
+## 0.1.7 起的在线更新
+
+Sparkle 固定版本和二进制校验记录在 Package.swift / Package.resolved。构建脚本复制 framework 并由内到外签署其辅助程序；不要只签应用最外层。CFBundleVersion 默认跟随 VERSION，后续发布必须递增。
+
+本机首次使用 `.build/artifacts/sparkle/Sparkle/bin/generate_keys --account NotchQuota` 建立 Ed25519 密钥（私钥仅存登录钥匙串，公钥在 Info.plist）。已有项目不得重新生成或替换公钥；本机发布沿用 NotchQuota account。CI 如启用签名发布，需另外安全配置 `SPARKLE_PRIVATE_KEY` GitHub Secret；不从本机自动导出上传。
+
+`scripts/package.sh` 在公证完成后调用 `scripts/generate-appcast.sh`，将唯一当前版 DMG 放入临时目录，由 Sparkle 生成签名 appcast。必须将 `dist/appcast.xml` 与 DMG、SHA256SUMS 一同上传发布。订阅固定为 GitHub Releases/latest/download/appcast.xml，确保正式版设为 latest；先在 draft 上传全部文件，检查同一提交 CI、签名、公证及下载哈希后再公开。切勿手改已签名 feed；改动后重新生成。
+
+旧 0.1.6 不包含更新器，无法自行引导更新，需手动升级一次。更新流程验证需使用一个包含更新器、build 版本较低的签名测试副本，从实际 HTTPS feed 下载更高版，检查安装后签名、版本、进程路径和开机启动状态。只改测试副本版本号不等于验证历史 0.1.6 自带在线更新。任何完整 trace、钥匙串和账户数据均不上传。

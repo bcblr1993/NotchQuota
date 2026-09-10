@@ -9,4 +9,8 @@ ACTUAL="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/C
 [ "$ACTUAL" = "$VERSION" ]
 [ -f "$APP/Contents/Resources/AppIcon.icns" ]
 [ -d "$APP/Contents/Resources/NotchQuota_NotchQuota.bundle" ]
+[ -d "$APP/Contents/Frameworks/Sparkle.framework" ]
+[ -f "$APP/Contents/Resources/Sparkle-LICENSE" ]
+/usr/libexec/PlistBuddy -c 'Print :SUPublicEDKey' "$APP/Contents/Info.plist" >/dev/null
+/usr/libexec/PlistBuddy -c 'Print :SUFeedURL' "$APP/Contents/Info.plist" >/dev/null
 printf 'Release layout verified: %s arm64\n' "$VERSION"
