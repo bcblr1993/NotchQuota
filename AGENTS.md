@@ -6,6 +6,7 @@
 - 紧凑图标和百分比常驻；15 秒无操作收起详情；每 60 秒按 Codex → Claude → Antigravity 轮换用户勾选的已安装应用；尊重自动轮换开关和本机保存的应用选择，交互和休眠时暂停，自动轮换只读缓存。后台刷新不得展开详情或重置计时；不要恢复额度线或呼吸灯。
 - 提供商解析变更添加脱敏 fixture 回归测试；保留未知与真实零额度的区别。
 - 修改后运行 swift test、scripts/build-app.sh、scripts/check-release.sh。
+- `Packages/NotchQuotaKit` 是 macOS 与 iOS 共用的纯逻辑层，改动后另跑 `swift test --package-path Packages/NotchQuotaKit`，并确认仍能编译到 iOS；不要引入第三方依赖。配对协议与传输格式两端必须同版本改动，细节见 docs/MOBILE.md。
 - 修改 UI 时运行 --ui-smoke 并检查图片；不要为验证而退出用户正在工作的其他应用。
 - 版本统一读取 VERSION。公开安装包必须签名、公证并通过 Gatekeeper 验证。
 - 发布凭据只允许使用本机钥匙串或 GitHub Secrets，不写入仓库。

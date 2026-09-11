@@ -9,6 +9,19 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 jobs:
+  shared-kit:
+    runs-on: macos-14
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test shared kit
+        run: swift test --package-path Packages/NotchQuotaKit
+      # The kit exists to be reused by the iOS app and its widget extension,
+      # so a macOS-only compile is not enough to call it green.
+      - name: Verify the kit still builds for iOS
+        run: xcodebuild -scheme NotchQuotaKit -destination 'generic/platform=iOS' build
+        working-directory: Packages/NotchQuotaKit
+
   test-build:
     runs-on: macos-14
     timeout-minutes: 20
