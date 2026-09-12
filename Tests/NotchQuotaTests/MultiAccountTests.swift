@@ -33,6 +33,27 @@ final class MultiAccountTests: XCTestCase {
         XCTAssertNil(try AccountIdentity.parse(["sub":"one"]).picture)
         XCTAssertThrowsError(try AccountIdentity.parse(["name":"Missing identity"]))
     }
+    func testEmailDisplayAndFallback() throws {
+        let account = try AccountIdentity.parse(["sub": "stable", "name": "Same", "email": "  first@example.test\n"])
+        XCTAssertEqual(account.displayName, "first@example.test")
+        let renamed = try AccountIdentity.parse(["sub": "stable", "email": "second@example.test"])
+        XCTAssertEqual(account.subject, renamed.subject, "Email changes must not change account identity")
+        for payload: [String: Any] in [["sub": "stable", "name": "Same"], ["sub": "stable", "name": "Same", "email": "  "] , ["sub": "stable", "name": "Same", "email": 123]] {
+            let fallback = try AccountIdentity.parse(payload)
+            XCTAssertNil(fallback.email)
+            XCTAssertEqual(fallback.displayName, "Same")
+        }
+        XCTAssertEqual(try AccountIdentity.parse(["sub": "stable"]).displayName, "Google 账号")
+    }
+    @MainActor func testEmailTitlePreservesCustomAlias() {
+        let app = AppDelegate()
+        app.accountNames[QuotaTarget.antigravity.id] = "first@example.test"
+        XCTAssertEqual(app.displayTitle(.antigravity), "Antigravity · first@example.test")
+        XCTAssertEqual(app.accountLabel(.antigravity), "first@example.test")
+        app.accountAliases[QuotaTarget.antigravity.id] = "工作账号"
+        XCTAssertEqual(app.displayTitle(.antigravity), "工作账号")
+        XCTAssertEqual(app.accountLabel(.antigravity), "工作账号")
+    }
     func testAvatarOriginValidation() {
         XCTAssertTrue(AccountAvatars.allowed(URL(string: "https://lh3.googleusercontent.com/photo")!))
         for value in ["http://lh3.googleusercontent.com/photo", "https://lh3.googleusercontent.com.attacker.test/photo", "https://example.org/photo", "https://user:password@lh3.googleusercontent.com/photo", "https://lh3.googleusercontent.com:8080/photo"] {

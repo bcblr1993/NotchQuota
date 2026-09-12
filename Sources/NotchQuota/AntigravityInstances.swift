@@ -28,10 +28,13 @@ struct AccountIdentity: Equatable {
     var subject: String
     var name: String
     var picture: URL?
+    var email: String?
+    var displayName: String { email ?? name }
     static func parse(_ payload: [String: Any]) throws -> Self {
         guard let subject = payload["sub"] as? String, !subject.isEmpty else { throw QuotaError.message("无法确认账号身份") }
         let name = (payload["name"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
-        return .init(subject: subject, name: (name?.isEmpty == false ? name! : "Google 账号"), picture: (payload["picture"] as? String).flatMap(URL.init(string:)))
+        let email = (payload["email"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return .init(subject: subject, name: (name?.isEmpty == false ? name! : "Google 账号"), picture: (payload["picture"] as? String).flatMap(URL.init(string:)), email: email?.isEmpty == false ? email : nil)
     }
 }
 

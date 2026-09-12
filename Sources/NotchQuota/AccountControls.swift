@@ -39,6 +39,10 @@ extension AppDelegate {
         defaults.set(blockedAccounts.sorted(), forKey: "blockedAccounts")
         defaults.set(try? JSONEncoder().encode(manualInstances), forKey: "manualInstances")
     }
+    func accountLabel(_ candidate: QuotaTarget) -> String {
+        if let alias = accountAliases[candidate.id], !alias.isEmpty { return alias }
+        return accountNames[candidate.id] ?? candidate.title
+    }
     func displayTitle(_ candidate: QuotaTarget) -> String {
         if let alias = accountAliases[candidate.id], !alias.isEmpty { return alias }
         if let name = accountNames[candidate.id], candidate.provider == .antigravity {

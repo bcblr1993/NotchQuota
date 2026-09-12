@@ -170,7 +170,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func updateView(animated: Bool = false) {
         quotaView.provider = provider
         quotaView.nextProviderTitle = nextTarget().map(displayTitle)
-        quotaView.accountTitle = provider == .antigravity && (target.instance != nil || visibleTargets.filter { $0.provider == .antigravity }.count > 1) ? displayTitle(target) : nil
+        quotaView.accountTitle = provider == .antigravity && (target.instance != nil || visibleTargets.filter { $0.provider == .antigravity }.count > 1) ? accountLabel(target) : nil
         if quotaView.accountTitle == nil { quotaView.accountImage = nil }
         else {
             let number = target.instance.flatMap { item in instances.firstIndex(where: { $0.id == item.id }) }.map { String($0 + 2) } ?? "1"
@@ -310,7 +310,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         self.saveAccountPreferences(); self.discoverInstalled(); return
                     }
                     self.accountBindings[candidate.id] = identity.subject
-                    self.accountNames[candidate.id] = identity.name
+                    self.accountNames[candidate.id] = identity.displayName
                     self.saveAccountPreferences()
                 }
                 self.states[candidate] = DisplayState(snapshot: snapshot)
