@@ -58,6 +58,8 @@ final class QuotaButton: NSButton {
 final class QuotaView: NSView {
     var provider: Provider = .codex
     var nextProviderTitle: String?
+    var accountTitle: String?
+    var accountImage: NSImage?
     var state = DisplayState()
     var topHeight: CGFloat = 32
     var cameraWidth: CGFloat = 0
@@ -97,9 +99,9 @@ final class QuotaView: NSView {
         updateButton.isHidden = updateVersion == nil
         updateButton.toolTip = updateVersion.map { "新版本 \($0) 可更新，点击下载安装" }
         updateButton.setAccessibilityLabel(updateButton.toolTip ?? "检查更新")
-        iconButton.image = provider.icon
-        iconButton.toolTip = nextProviderTitle.map { "切换至 \($0)" } ?? provider.title
-        iconButton.setAccessibilityLabel(nextProviderTitle.map { "当前 \(provider.title)，切换至 \($0)" } ?? "当前 \(provider.title)")
+        iconButton.image = accountImage ?? provider.icon
+        iconButton.toolTip = nextProviderTitle.map { "切换至 \($0)" } ?? (accountTitle ?? provider.title)
+        iconButton.setAccessibilityLabel(nextProviderTitle.map { "当前 \(accountTitle ?? provider.title)，切换至 \($0)" } ?? "当前 \(accountTitle ?? provider.title)")
         quotaButton.title = ""
         quotaButton.setAccessibilityLabel("\(provider.title) 剩余额度 \(percentage)，\(expanded ? "收起详情" : "显示详情")")
         quotaButton.toolTip = state.error ?? (state.stale ? "上次读取的额度，等待更新" : (expanded ? "点击收起详情" : "剩余额度 · 点击展开"))
@@ -155,7 +157,7 @@ final class QuotaView: NSView {
         let muted = NSColor(white: 0.61, alpha: 1)
         let rows = state.snapshot?.windows ?? []
         var y = topHeight + 12
-        text(state.stale ? "上次剩余额度" : "剩余额度", x: 17, y: y + 7, size: 11, color: muted)
+        text(accountTitle ?? (state.stale ? "上次剩余额度" : "剩余额度"), x: 17, y: y + 7, size: 11, color: muted, width: bounds.width - 125)
         text(percentage, x: bounds.width - 96, y: y, size: 24, color: tint, weight: .medium, width: 79, align: .right)
         y += 39
         if rows.isEmpty {

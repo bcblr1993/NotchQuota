@@ -98,13 +98,3 @@ final class LoginItemTests: XCTestCase {
         XCTAssertTrue(LoginItemState.unavailable.shouldEnableOnToggle)
     }
 }
-
-final class ProviderVisibilityTests: XCTestCase {
-    func testManualSelectionAndUninstallFallback() {
-        XCTAssertEqual(ProviderVisibility.selected(installed: Provider.allCases, excluded: [.claude, .antigravity]), [.codex])
-        XCTAssertEqual(ProviderVisibility.selected(installed: [.claude, .antigravity], excluded: [.claude, .antigravity]), [.claude])
-        XCTAssertEqual(ProviderVisibility.selected(installed: [.codex], excluded: []), [.codex])
-        XCTAssertEqual(ProviderVisibility.selected(installed: [], excluded: []), [])
-        XCTAssertEqual(ProviderVisibility.selected(installed: Provider.allCases, excluded: [.claude]), [.codex, .antigravity])
-    }
-}

@@ -6,14 +6,6 @@ enum Provider: String, CaseIterable, Codable {
     var title: String { switch self { case .codex: return "Codex"; case .claude: return "Claude"; case .antigravity: return "Antigravity" } }
     var next: Provider { Self.allCases[(Self.allCases.firstIndex(of: self)! + 1) % Self.allCases.count] }
 }
-/// Keep at least one installed app accessible so its menu can change preferences.
-enum ProviderVisibility {
-    static func selected(installed: [Provider], excluded: Set<Provider>) -> [Provider] {
-        let ordered = Provider.allCases.filter(installed.contains)
-        let selected = ordered.filter { !excluded.contains($0) }
-        return selected.isEmpty ? Array(ordered.prefix(1)) : selected
-    }
-}
 /// Selection is independent of login state and whether an installed app is running.
 struct ProviderSelection {
     var installed: [Provider]
@@ -40,7 +32,15 @@ struct Snapshot: Codable {
 }
 enum QuotaError: LocalizedError {
     case message(String)
-    var errorDescription: String? { if case .message(let value) = self { return value }; return nil }
+    case accountChanged
+    case identityUnverified
+    var errorDescription: String? {
+        switch self {
+        case .message(let value): return value
+        case .accountChanged: return "账号已变化，请在菜单重新勾选确认"
+        case .identityUnverified: return "暂时无法核对账号身份，请稍后刷新"
+        }
+    }
 }
 enum QuotaParser {
     static func number(_ value: Any?) -> Double? {

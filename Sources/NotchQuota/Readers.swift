@@ -25,12 +25,24 @@ final class ProviderRedirectGuard: NSObject, URLSessionTaskDelegate, @unchecked 
     }
 }
 actor QuotaReader {
-    private let remote: URLSession = {
+    private let googleInstance: AntigravityInstance?
+    private let verifyRefresh: Bool
+    private var googleIdentity: AccountIdentity?
+    private var identityCheckedAt: Date?
+    init(googleInstance: AntigravityInstance? = nil, verifyRefresh: Bool = false, session: URLSession? = nil) {
+        self.googleInstance = googleInstance; self.verifyRefresh = verifyRefresh
+        self.remote = session ?? Self.makeSession()
+    }
+    func accountIdentity() -> AccountIdentity? { googleIdentity }
+    func clearGoogleCache() { googleCredential = nil; googleSourceAccess = nil; googleProject = nil; googleIdentity = nil; identityCheckedAt = nil; googleEndpoint = nil; googleClient = nil }
+
+    private let remote: URLSession
+    private static func makeSession() -> URLSession {
         let c = URLSessionConfiguration.ephemeral
         c.timeoutIntervalForRequest = 20; c.timeoutIntervalForResource = 25
         c.httpShouldSetCookies = false
         return URLSession(configuration: c, delegate: ProviderRedirectGuard(), delegateQueue: nil)
-    }()
+    }
     private var googleCredential: GoogleCredential?
     private var googleProject: String?
     private var googleSourceAccess: String?
@@ -58,7 +70,7 @@ actor QuotaReader {
         }
         return try json(data)
     }
-    func fetch(_ provider: Provider) async throws -> Snapshot {
+    func fetch(_ provider: Provider, expectedGoogleSubject: String? = nil) async throws -> Snapshot {
         let result: Snapshot
         switch provider {
         case .codex:
@@ -85,7 +97,7 @@ actor QuotaReader {
                 result = QuotaParser.claude(try await request("https://api.anthropic.com/api/oauth/usage", headers: ["Authorization": "Bearer \(token)", "anthropic-beta": "oauth-2025-04-20"]))
             }
         case .antigravity:
-            result = try await antigravityRemote()
+            result = try await antigravityRemote(expectedSubject: expectedGoogleSubject)
         }
         guard result.remaining != nil else { throw QuotaError.message("服务未返回可识别的额度") }
         return result
@@ -105,14 +117,14 @@ actor QuotaReader {
         }
         throw QuotaError.message("Codex 登录续期失败")
     }
-    private func antigravityRemote() async throws -> Snapshot {
-        let source = try GoogleCredentials.read()
+    private func antigravityRemote(expectedSubject: String?) async throws -> Snapshot {
+        let source = try GoogleCredentials.read(instance: googleInstance)
         if googleCredential?.fingerprint != source.fingerprint || googleSourceAccess != source.access {
-            googleCredential = source; googleSourceAccess = source.access; googleProject = nil
+            googleCredential = source; googleSourceAccess = source.access; googleProject = nil; googleIdentity = nil; identityCheckedAt = nil
         }
         var credential = googleCredential ?? source
-        if credential.expiry == nil || credential.expiry!.timeIntervalSinceNow < 60 {
-            let candidates = try googleClient.map { [$0] } ?? GoogleCredentials.clientCandidates()
+        if verifyRefresh || credential.expiry == nil || credential.expiry!.timeIntervalSinceNow < 60 {
+            let candidates = try googleClient.map { [$0] } ?? GoogleCredentials.clientCandidates(instance: googleInstance)
             var refreshed = false
             for (id, secret) in candidates {
                 let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-._~"))
@@ -129,9 +141,22 @@ actor QuotaReader {
             guard refreshed else { throw QuotaError.message("Antigravity 登录已过期，请重新登录") }
         }
         // Read the installed build's endpoint; production and daily are different quota pools.
-        if googleEndpoint == nil { googleEndpoint = try Installation.antigravityEndpoint() }
+        if googleEndpoint == nil {
+            if let instance = googleInstance {
+                let data = try Data(contentsOf: instance.appURL.appendingPathComponent("Contents/Resources/app.asar"), options: .alwaysMapped)
+                googleEndpoint = try Installation.endpoint(from: data)
+            } else { googleEndpoint = try Installation.antigravityEndpoint() }
+        }
         let base = googleEndpoint!
         let headers = ["Authorization": "Bearer \(credential.access)", "User-Agent": "antigravity"]
+        if googleIdentity == nil || Date().timeIntervalSince(identityCheckedAt ?? .distantPast) >= 3600 {
+            let identity: AccountIdentity
+            do { identity = try AccountIdentity.parse(await request("https://openidconnect.googleapis.com/v1/userinfo", headers: headers)) }
+            catch { if googleIdentity == nil { throw QuotaError.identityUnverified }; throw error }
+            if googleIdentity?.subject != identity.subject { googleProject = nil }
+            googleIdentity = identity; identityCheckedAt = Date()
+        }
+        if let expectedSubject, googleIdentity?.subject != expectedSubject { throw QuotaError.accountChanged }
         if googleProject == nil {
             let assist = try await request(base + "loadCodeAssist", headers: headers, body: ["metadata": ["ideType": "ANTIGRAVITY", "platform": "PLATFORM_UNSPECIFIED", "pluginType": "GEMINI"]])
             googleProject = assist["cloudaicompanionProject"] as? String ?? (assist["cloudaicompanionProject"] as? [String: Any])?["id"] as? String

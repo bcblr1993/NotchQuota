@@ -38,7 +38,7 @@ extension AppDelegate {
                 toggleExpanded(); await wait(0.08)
                 event("expand_intermediate_\(index)", passed: panel.frame.height > topHeight)
                 // Simulate arrival of a quota result while the panel is moving.
-                states[provider] = DisplayState(snapshot: Snapshot(windows: [.init(id: "fixture", label: "每周", remaining: Double(50 + index))]))
+                states[target] = DisplayState(snapshot: Snapshot(windows: [.init(id: "fixture", label: "每周", remaining: Double(50 + index))]))
                 updateView(animated: true)
                 await wait(0.3)
                 next(); await wait(0.45)

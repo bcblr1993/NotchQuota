@@ -5,8 +5,28 @@ import QuartzCore
 final class AppDelegate: NSObject, NSApplicationDelegate {
     var panel: NotchPanel!
     var quotaView: QuotaView!
-    var provider: Provider = .codex
-    var installed: [Provider] = []
+    var target: QuotaTarget = .codex
+    var provider: Provider { get { target.provider } set { target = .standard(newValue) } }
+    var visibleTargets: [QuotaTarget] = []
+    var installed: [Provider] { visibleTargets.map(\.provider) }
+    var instances: [AntigravityInstance] = []
+    var manualInstances: [AntigravityInstance] = []
+    var enabledInstances: Set<String> = []
+    var accountBindings: [String: String] = [:]
+    var accountNames: [String: String] = [:]
+    var accountAliases: [String: String] = [:]
+    var accountAvatars: [String: NSImage] = [:]
+    var avatarHashes: [String: Int] = [:]
+    var blockedAccounts: Set<String> = []
+    var instanceReaders: [String: QuotaReader] = [:]
+    var accountGenerations: [String: Int] = [:]
+    var refreshJobs: [String: Task<Void, Never>] = [:]
+    var refreshCycle: Task<Void, Never>?
+    var discoveryJob: Task<Void, Never>?
+    let instanceDiscovery = AntigravityDiscovery()
+    let avatarLoader = AccountAvatars()
+    var recoveryItem: NSStatusItem?
+
     var detectedApps: [Provider] = []
     var excludedProviders: Set<Provider> = []
     var automaticRotation = true
@@ -15,8 +35,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var motionDuration: TimeInterval {
         suppressMotion || NSWorkspace.shared.accessibilityDisplayShouldReduceMotion || ProcessInfo.processInfo.isLowPowerModeEnabled ? 0 : 0.20
     }
-    var states: [Provider: DisplayState] = [:]
-    var lastAttempt: [Provider: Date] = [:]
+    var states: [QuotaTarget: DisplayState] = [:]
+    var lastAttempt: [QuotaTarget: Date] = [:]
     let reader = QuotaReader()
     let appUpdates = AppUpdates()
     var idle = IdleState()
@@ -65,6 +85,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             excludedProviders = Set((UserDefaults.standard.stringArray(forKey: "excludedProviders") ?? []).compactMap(Provider.init(rawValue:)))
             automaticRotation = UserDefaults.standard.object(forKey: "automaticRotation") as? Bool ?? true
         }
+        if !demo && !testMode { loadAccountPreferences() }
         updateScreen()
         if demo || testMode { loadDemo() }
         discoverInstalled(); updateView(); show()
@@ -88,13 +109,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             })
         }
         refreshAll()
+        if !demo && !testMode { scanInstances() }
         if animationTestMode { runAnimationTest() }
         else if testMode { runUISmoke() }
     }
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool { show(); return true }
     func loadDemo() {
         for (p, values) in [(Provider.codex, [82.0, 91]), (.claude, [36.0, 64]), (.antigravity, [12.0, 75, 63, 88])] {
-            states[p] = DisplayState(snapshot: Snapshot(windows: values.enumerated().map { i, value in
+            states[.standard(p)] = DisplayState(snapshot: Snapshot(windows: values.enumerated().map { i, value in
                 QuotaWindow(id: "demo-\(i)", label: p == .antigravity ? ["Gemini · 每周", "Gemini · 5 小时", "Claude / GPT · 每周", "Claude / GPT · 5 小时"][i] : (i == 0 ? "5 小时" : "每周"), remaining: value, reset: Date().addingTimeInterval(8400))
             }))
         }
@@ -113,7 +135,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let compact = cameraWidth > 0 ? cameraWidth + 94 : 100
         let expanded = quotaView.expanded
         let width = expanded ? max(276, compact) : compact
-        let rows = min(6, states[provider]?.snapshot?.windows.count ?? 0)
+        let rows = min(6, states[target]?.snapshot?.windows.count ?? 0)
         let detailHeight: CGFloat = rows == 0 ? 105 : CGFloat(12 + 39 + rows * 32 + 29)
         let height = topHeight + (expanded ? detailHeight : 0)
         let target = NSRect(x: screen.frame.midX - width / 2, y: screen.frame.maxY - height, width: width, height: height)
@@ -130,24 +152,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func discoverInstalled() {
         let candidates = testMode ? (smokeInstalled ?? Provider.allCases) : demo ? Provider.allCases : Provider.allCases.filter { Installation.app($0.title) != nil }
         detectedApps = candidates
-        let selected = ProviderVisibility.selected(installed: candidates, excluded: excludedProviders)
-        // Keep one installed app accessible if the previously selected app was removed.
-        if let fallback = selected.first, excludedProviders.remove(fallback) != nil { saveProviderPreferences() }
-        let detected = selected
-        guard detected != installed else {
-            if detected.isEmpty { idle.active = false }
+        var selected = candidates.filter { !excludedProviders.contains($0) && !blockedAccounts.contains($0.rawValue) }.map(QuotaTarget.standard)
+        selected += instances.filter { enabledInstances.contains($0.id) && !blockedAccounts.contains($0.id) && $0.supported }.map { QuotaTarget(provider: .antigravity, instance: $0) }
+        let old = visibleTargets
+        visibleTargets = selected
+        updateRecoveryItem()
+        guard selected != old else {
+            if selected.isEmpty { idle.active = false }
             return
         }
-        installed = detected
+        for removed in old where !selected.contains(removed) { invalidateAccount(removed) }
         scheduleRotation()
-        if let selected = ProviderSelection(installed: installed).selected(preferred: provider) { provider = selected }
-        if installed.isEmpty || !idle.active { rest() }
+        if !selected.contains(target), let first = selected.first { target = first }
+        if selected.isEmpty || !idle.active { rest() }
         updateView()
     }
     func updateView(animated: Bool = false) {
         quotaView.provider = provider
-        quotaView.nextProviderTitle = installed.count > 1 ? ProviderSelection(installed: installed).next(after: provider)?.title : nil
-        quotaView.state = states[provider] ?? DisplayState()
+        quotaView.nextProviderTitle = nextTarget().map(displayTitle)
+        quotaView.accountTitle = provider == .antigravity && (target.instance != nil || visibleTargets.filter { $0.provider == .antigravity }.count > 1) ? displayTitle(target) : nil
+        if quotaView.accountTitle == nil { quotaView.accountImage = nil }
+        else {
+            let number = target.instance.flatMap { item in instances.firstIndex(where: { $0.id == item.id }) }.map { String($0 + 2) } ?? "1"
+            quotaView.accountImage = accountAvatars[target.id] ?? AvatarImage.placeholder(number)
+        }
+        quotaView.state = states[target] ?? DisplayState()
         resize(animated: animated)
     }
     func activity() {
@@ -224,17 +253,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func next() {
         switchProvider()
         scheduleRotation()
-        refresh(provider)
+        refresh(target)
     }
     func switchProvider() {
-        guard installed.count > 1, let next = ProviderSelection(installed: installed).next(after: provider) else { return }
+        guard let next = nextTarget() else { return }
         if panel.isVisible && motionDuration > 0 {
             let transition = CATransition()
             transition.type = .fade; transition.duration = 0.38
             transition.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
             quotaView.layer?.add(transition, forKey: "providerSwitch")
         }
-        provider = next
+        target = next
         updateView(animated: true)
     }
     func toggleExpanded() {
@@ -245,17 +274,69 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
     func refreshAll() {
         guard !refreshSuspended else { return }
-        discoverInstalled(); for provider in installed { refresh(provider) }
+        discoverInstalled()
+        refreshCycle?.cancel()
+        let targets = visibleTargets
+        refreshCycle = Task { @MainActor [weak self] in
+            for (index, candidate) in targets.enumerated() {
+                if index > 0 { try? await Task.sleep(nanoseconds: 2_000_000_000) }
+                guard !Task.isCancelled, let self, !self.refreshSuspended else { return }
+                self.refresh(candidate)
+            }
+        }
     }
-    func refresh(_ p: Provider) {
-        guard !refreshSuspended, installed.contains(p), !demo, !testMode, states[p]?.loading != true else { return }
-        if let last = lastAttempt[p], Date().timeIntervalSince(last) < 30 { return }
-        lastAttempt[p] = Date(); var state = states[p] ?? DisplayState(); state.loading = true; states[p] = state
-        if p == provider { updateView(animated: true) }
-        Task {
-            do { let snapshot = try await reader.fetch(p); states[p] = DisplayState(snapshot: snapshot) }
-            catch { var failed = states[p] ?? DisplayState(); failed.loading = false; failed.error = readableError(error); states[p] = failed }
-            if p == provider { updateView(animated: true) }
+    func refresh(_ candidate: QuotaTarget) {
+        guard !refreshSuspended, visibleTargets.contains(candidate), !demo, !testMode, states[candidate]?.loading != true else { return }
+        if let last = lastAttempt[candidate], Date().timeIntervalSince(last) < 30 { return }
+        lastAttempt[candidate] = Date()
+        var state = states[candidate] ?? DisplayState(); state.loading = true; states[candidate] = state
+        if candidate == target { updateView(animated: true) }
+        let generation = accountGenerations[candidate.id, default: 0]
+        let accountReader: QuotaReader
+        if let instance = candidate.instance {
+            if instanceReaders[candidate.id] == nil { instanceReaders[candidate.id] = QuotaReader(googleInstance: instance) }
+            accountReader = instanceReaders[candidate.id]!
+        } else { accountReader = reader }
+        refreshJobs[candidate.id] = Task { @MainActor [weak self] in
+            do {
+                let snapshot = try await accountReader.fetch(candidate.provider, expectedGoogleSubject: self?.accountBindings[candidate.id])
+                let identity = candidate.provider == .antigravity ? await accountReader.accountIdentity() : nil
+                guard let self, !Task.isCancelled, self.visibleTargets.contains(candidate), self.accountGenerations[candidate.id, default: 0] == generation else { return }
+                if let identity {
+                    if let expected = self.accountBindings[candidate.id], expected != identity.subject {
+                        self.blockedAccounts.insert(candidate.id)
+                        self.states[candidate] = DisplayState(error: "账号已变化，请在菜单重新勾选确认")
+                        self.accountNames[candidate.id] = nil; self.accountAvatars[candidate.id] = nil
+                        self.saveAccountPreferences(); self.discoverInstalled(); return
+                    }
+                    self.accountBindings[candidate.id] = identity.subject
+                    self.accountNames[candidate.id] = identity.name
+                    self.saveAccountPreferences()
+                }
+                self.states[candidate] = DisplayState(snapshot: snapshot)
+                if candidate == self.target { self.updateView(animated: true) }
+                if let identity, let data = await self.avatarLoader.data(for: identity.picture), !Task.isCancelled,
+                   self.visibleTargets.contains(candidate), self.accountGenerations[candidate.id, default: 0] == generation,
+                   self.accountBindings[candidate.id] == identity.subject {
+                    if self.accountAvatars[candidate.id] == nil || self.avatarHashes[candidate.id] != data.hashValue {
+                        self.accountAvatars[candidate.id] = AvatarImage.make(data); self.avatarHashes[candidate.id] = data.hashValue
+                    }
+                    if candidate == self.target { self.updateView() }
+                }
+            } catch {
+                guard let self, !Task.isCancelled, self.accountGenerations[candidate.id, default: 0] == generation else { return }
+                if case QuotaError.accountChanged = error {
+                    self.blockedAccounts.insert(candidate.id)
+                    self.states[candidate] = DisplayState(error: self.readableError(error))
+                    self.accountNames[candidate.id] = nil; self.accountAvatars[candidate.id] = nil
+                    self.saveAccountPreferences(); self.discoverInstalled(); return
+                }
+                if case QuotaError.identityUnverified = error {
+                    self.states[candidate] = DisplayState(); self.accountNames[candidate.id] = nil; self.accountAvatars[candidate.id] = nil
+                }
+                var failed = self.states[candidate] ?? DisplayState(); failed.loading = false; failed.error = self.readableError(error); self.states[candidate] = failed
+                if candidate == self.target { self.updateView(animated: true) }
+            }
         }
     }
     func readableError(_ error: Error) -> String {
@@ -266,6 +347,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return "暂时无法读取额度"
     }
     func menu(_ event: NSEvent) {
+        hoverWork?.cancel(); hoverWork = nil; collapseWork?.cancel(); idleTimer?.invalidate(); idleTimer = nil
+        let menu = makeMenu(); activeMenu = menu
+        NSMenu.popUpContextMenu(menu, with: event, for: quotaView)
+        activeMenu = nil
+        idle.interact(at: ProcessInfo.processInfo.systemUptime); scheduleIdle()
+    }
+    func makeMenu() -> NSMenu {
         let menu = NSMenu(); menu.autoenablesItems = false
         let refresh = NSMenuItem(title: "刷新额度", action: #selector(manualRefresh), keyEquivalent: "r"); refresh.target = self; menu.addItem(refresh)
         let hide = NSMenuItem(title: "收起详情", action: #selector(manualRest), keyEquivalent: "h"); hide.target = self; menu.addItem(hide)
@@ -275,14 +363,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let choices = NSMenu()
         choices.autoenablesItems = false
         for candidate in detectedApps {
-            let item = NSMenuItem(title: candidate.title, action: #selector(toggleProviderVisibility(_:)), keyEquivalent: "")
+            let item = NSMenuItem(title: displayTitle(.standard(candidate)), action: #selector(toggleProviderVisibility(_:)), keyEquivalent: "")
+            item.image = accountAvatars[candidate.rawValue] ?? candidate.icon
             item.target = self; item.representedObject = candidate.rawValue
-            item.state = installed.contains(candidate) ? .on : .off
-            item.isEnabled = !installed.contains(candidate) || installed.count > 1
+            item.state = visibleTargets.contains(.standard(candidate)) ? .on : .off
+            if blockedAccounts.contains(candidate.rawValue) { item.title += " · 账号已变化，重新勾选确认" }
             choices.addItem(item)
         }
         let selection = NSMenuItem(title: "显示的应用", action: nil, keyEquivalent: "")
         selection.submenu = choices; menu.addItem(selection)
+        appendAccountMenu(to: menu)
         let info = NSMenuItem(title: "无操作 15 秒收起详情", action: nil, keyEquivalent: ""); info.isEnabled = false; menu.addItem(info)
         menu.addItem(.separator())
         let loginState = demo || testMode ? LoginItemState.disabled : LaunchAtLogin.state
@@ -305,9 +395,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let help = NSMenuItem(title: "使用说明 / 反馈问题…", action: #selector(openHelp), keyEquivalent: ""); help.target = self; menu.addItem(help)
         menu.addItem(.separator())
         let quit = NSMenuItem(title: "退出 NotchQuota", action: #selector(quit), keyEquivalent: "q"); quit.target = self; menu.addItem(quit)
-        activeMenu = menu
-        NSMenu.popUpContextMenu(menu, with: event, for: quotaView)
-        activeMenu = nil
+        return menu
     }
     func saveProviderPreferences() {
         guard !demo && !testMode else { return }
@@ -319,9 +407,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
     @objc func toggleProviderVisibility(_ sender: NSMenuItem) {
         guard let raw = sender.representedObject as? String, let candidate = Provider(rawValue: raw) else { return }
-        guard !installed.contains(candidate) || installed.count > 1 else { return }
-        if !excludedProviders.insert(candidate).inserted { excludedProviders.remove(candidate) }
-        saveProviderPreferences(); discoverInstalled(); scheduleRotation()
+        if blockedAccounts.remove(candidate.rawValue) != nil {
+            accountBindings[candidate.rawValue] = nil; excludedProviders.remove(candidate); saveAccountPreferences()
+        } else if !excludedProviders.insert(candidate).inserted { excludedProviders.remove(candidate) }
+        saveProviderPreferences(); discoverInstalled(); scheduleRotation(); refresh(.standard(candidate))
     }
     @objc func manualRefresh() { activity(); refreshAll() }
     @objc func manualRest() { rest() }
@@ -412,6 +501,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             check(provider == fixed && rotationTimer == nil, "rotation preference disables timer")
             automaticRotation = true; scheduleRotation()
             check(rotationTimer != nil, "rotation preference restores timer")
+            let extra = AntigravityInstance(appPath: "/Fixtures/Extra.app", credentialPath: "/Fixtures/extra.json", name: "Antigravity · 工作")
+            let extraTarget = QuotaTarget(provider: .antigravity, instance: extra)
+            instances = [extra]; discoverInstalled()
+            check(!visibleTargets.contains(extraTarget), "new instance defaults hidden")
+            enabledInstances = [extra.id]; discoverInstalled()
+            check(visibleTargets.count == 4, "extra instance joins rotation independently")
+            target = .antigravity; rest(); rotateAutomatically()
+            check(target == extraTarget, "rotation reaches extra instance")
+            states[extraTarget] = DisplayState(snapshot: Snapshot(windows: [.init(id: "extra", label: "每周", remaining: 73)]))
+            updateView(); quotaView.expanded = true; resize(); capture("multi-instance")
+            check(states[.antigravity]?.snapshot?.remaining != states[extraTarget]?.snapshot?.remaining, "instances keep separate quota caches")
+            excludedProviders = Set(Provider.allCases); discoverInstalled()
+            check(visibleTargets == [extraTarget] && rotationTimer == nil, "only extra instance can stay visible")
+            enabledInstances = []; discoverInstalled()
+            check(visibleTargets.isEmpty && !panel.isVisible && recoveryItem?.menu?.items.contains(where: { $0.submenu?.items.contains(where: { $0.action == #selector(toggleProviderVisibility(_:)) }) == true }) == true, "hide all leaves settings recovery")
+            excludedProviders = []; instances = []; discoverInstalled()
+            check(recoveryItem == nil, "restoring account removes recovery icon")
+            target = .codex; rest()
             smokeInstalled = [.claude]; discoverInstalled(); next(); await settle()
             check(provider == .claude && rotationTimer == nil && quotaView.nextProviderTitle == nil && panel.isVisible, "single app stays selected")
             capture("claude-only")
@@ -429,7 +536,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 }
 
-if let index = CommandLine.arguments.firstIndex(of: "--login-item") {
+if CommandLine.arguments.contains("--verify-accounts") {
+    Task {
+        let primary = await MainActor.run { Installation.app("Antigravity") }
+        let extras = await AntigravityDiscovery().discover(primary: primary, manual: [])
+        let targets = [QuotaTarget.antigravity] + extras.filter(\.supported).map { QuotaTarget(provider: .antigravity, instance: $0) }
+        var subjects = Set<String>(), failures = 0
+        for target in targets {
+            let reader = QuotaReader(googleInstance: target.instance, verifyRefresh: CommandLine.arguments.contains("--force-refresh"))
+            do {
+                let snapshot = try await reader.fetch(.antigravity)
+                guard let identity = await reader.accountIdentity() else { throw QuotaError.identityUnverified }
+                subjects.insert(identity.subject)
+                let data = await AccountAvatars().data(for: identity.picture)
+                let decoded = await MainActor.run { data.flatMap(AvatarImage.make) != nil }
+                print("Account \(target.title): quota=PASS windows=\(snapshot.windows.count) identity=PASS avatar=\(decoded ? "PASS" : "FALLBACK")")
+            } catch { failures += 1; print("Account \(target.title): FAIL \((error as? QuotaError)?.localizedDescription ?? "网络或本地读取失败")") }
+        }
+        print("Verified \(targets.count - failures)/\(targets.count); distinct identities=\(subjects.count)")
+        fflush(stdout); exit(failures == 0 ? 0 : 1)
+    }
+    dispatchMain()
+} else if let index = CommandLine.arguments.firstIndex(of: "--login-item") {
     MainActor.assumeIsolated {
         let operation = CommandLine.arguments.dropFirst(index + 1).first ?? "status"
         do {
