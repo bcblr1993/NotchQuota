@@ -80,9 +80,11 @@ extension AppDelegate {
             self.refreshAll()
         }
     }
-    func appendAccountMenu(to menu: NSMenu) {
+    func appendAccountMenu(to menu: NSMenu, inlineAccounts: NSMenu? = nil) {
         if !instances.isEmpty {
-            let accounts = NSMenu(); accounts.autoenablesItems = false
+            let accounts = inlineAccounts ?? NSMenu(); accounts.autoenablesItems = false
+            accounts.minimumWidth = 240
+            if inlineAccounts != nil && !accounts.items.isEmpty { accounts.addItem(.separator()) }
             for instance in instances {
                 let candidate = QuotaTarget(provider: .antigravity, instance: instance)
                 var title = displayTitle(candidate)
@@ -94,9 +96,11 @@ extension AppDelegate {
                 item.image = accountAvatars[instance.id] ?? AvatarImage.placeholder(String((instances.firstIndex(of: instance) ?? 0) + 2))
                 accounts.addItem(item)
             }
-            let parent = NSMenuItem(title: "Antigravity 多实例", action: nil, keyEquivalent: ""); parent.submenu = accounts; menu.addItem(parent)
+            if inlineAccounts == nil {
+                let parent = NSMenuItem(title: "Antigravity 多实例", action: nil, keyEquivalent: ""); parent.submenu = accounts; menu.addItem(parent)
+            }
         }
-        let settings = NSMenu(); settings.autoenablesItems = false
+        let settings = NSMenu(); settings.autoenablesItems = false; settings.minimumWidth = 200
         for (title, action) in [("重新扫描实例", #selector(scanInstances)), ("手动添加实例…", #selector(addManualInstance)), ("修改当前账号别名…", #selector(renameAccount))] {
             let item = NSMenuItem(title: title, action: action, keyEquivalent: ""); item.target = self
             item.isEnabled = !demo && !testMode && (action != #selector(renameAccount) || !visibleTargets.isEmpty)

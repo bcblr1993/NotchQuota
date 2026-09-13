@@ -72,11 +72,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         panel.hidesOnDeactivate = false; panel.acceptsMouseMovedEvents = true
         panel.isReleasedWhenClosed = false; panel.title = "NotchQuota"
         quotaView = QuotaView(frame: .zero); panel.contentView = quotaView
-        quotaView.onSwitch = { [weak self] in self?.next() }
-        quotaView.onExpand = { [weak self] in self?.toggleExpanded() }
+        quotaView.onSwitch = { [weak self] in if self?.testMode == false { self?.next() } }
+        quotaView.onExpand = { [weak self] in if self?.testMode == false { self?.toggleExpanded() } }
         quotaView.onActivity = { [weak self] in if self?.testMode == false { self?.activity() } }
         quotaView.onLeave = { [weak self] in if self?.testMode == false { self?.leave() } }
-        quotaView.onContextMenu = { [weak self] event in self?.menu(event) }
+        quotaView.onContextMenu = { [weak self] event in if self?.testMode == false { self?.menu(event) } }
         quotaView.onUpdate = { [weak self] in self?.openUpdates() }
         appUpdates.onChange = { [weak self] version in
             self?.quotaView.updateVersion = version
@@ -95,6 +95,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         refreshTimer = Timer.scheduledTimer(withTimeInterval: 180, repeats: true) { [weak self] _ in Task { @MainActor [weak self] in self?.refreshAll() } }
         refreshTimer?.tolerance = 15
         localMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown]) { [weak self] event in
+            if self?.testMode == true { return event }
             if event.type == .keyDown && event.keyCode == 53 { self?.rest() }
             else { self?.activity() }
             return event
@@ -243,7 +244,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         rotationTimer?.invalidate(); rotationTimer = nil
         guard !temporarilyHidden, automaticRotation, installed.count > 1, !refreshSuspended else { return }
         rotationTimer = Timer(timeInterval: 60, repeats: true) { [weak self] _ in
-            Task { @MainActor [weak self] in self?.rotateAutomatically() }
+            Task { @MainActor [weak self] in if self?.testMode == false { self?.rotateAutomatically() } }
         }
         rotationTimer?.tolerance = 1
         if let rotationTimer { RunLoop.main.add(rotationTimer, forMode: .common) }
@@ -317,14 +318,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
                 self.states[candidate] = DisplayState(snapshot: snapshot)
                 if candidate == self.target { self.updateView(animated: true) }
-                if let identity, let data = await self.avatarLoader.data(for: identity.picture), !Task.isCancelled,
-                   self.visibleTargets.contains(candidate), self.accountGenerations[candidate.id, default: 0] == generation,
-                   self.accountBindings[candidate.id] == identity.subject {
-                    if self.accountAvatars[candidate.id] == nil || self.avatarHashes[candidate.id] != data.hashValue {
-                        self.accountAvatars[candidate.id] = AvatarImage.make(data); self.avatarHashes[candidate.id] = data.hashValue
-                    }
-                    if candidate == self.target { self.updateView() }
-                }
+                if let identity { await self.updateAccountAvatar(identity, for: candidate, generation: generation) }
             } catch {
                 guard let self, !Task.isCancelled, self.accountGenerations[candidate.id, default: 0] == generation else { return }
                 if case QuotaError.accountChanged = error {
@@ -338,8 +332,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
                 var failed = self.states[candidate] ?? DisplayState(); failed.loading = false; failed.error = self.readableError(error); self.states[candidate] = failed
                 if candidate == self.target { self.updateView(animated: true) }
+                if candidate.provider == .antigravity, let identity = await accountReader.accountIdentity(),
+                   self.accountBindings[candidate.id] == nil || self.accountBindings[candidate.id] == identity.subject {
+                    guard !Task.isCancelled, self.visibleTargets.contains(candidate), self.accountGenerations[candidate.id, default: 0] == generation else { return }
+                    self.accountBindings[candidate.id] = identity.subject
+                    self.accountNames[candidate.id] = identity.displayName
+                    self.saveAccountPreferences()
+                    if candidate == self.target { self.updateView() }
+                    await self.updateAccountAvatar(identity, for: candidate, generation: generation)
+                }
             }
         }
+    }
+    func updateAccountAvatar(_ identity: AccountIdentity, for candidate: QuotaTarget, generation: Int) async {
+        guard let data = await avatarLoader.data(for: identity.picture), !Task.isCancelled,
+              visibleTargets.contains(candidate), accountGenerations[candidate.id, default: 0] == generation,
+              accountBindings[candidate.id] == identity.subject, !blockedAccounts.contains(candidate.id) else { return }
+        if accountAvatars[candidate.id] == nil || avatarHashes[candidate.id] != data.hashValue {
+            guard let image = AvatarImage.make(data) else { return }
+            accountAvatars[candidate.id] = image; avatarHashes[candidate.id] = data.hashValue
+        }
+        if candidate == target { updateView() }
     }
     func readableError(_ error: Error) -> String {
         if let error = error as? QuotaError { return error.localizedDescription }
@@ -350,21 +363,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
     func menu(_ event: NSEvent) {
         hoverWork?.cancel(); hoverWork = nil; collapseWork?.cancel(); idleTimer?.invalidate(); idleTimer = nil
+        quotaView.expanded = false; resize()
         let menu = makeMenu(); activeMenu = menu
-        NSMenu.popUpContextMenu(menu, with: event, for: quotaView)
+        // Present below the panel rather than at the notch/top-edge click location.
+        menu.popUp(positioning: nil, at: NSPoint(x: panel.frame.minX + 12, y: panel.frame.minY - 6), in: nil)
         activeMenu = nil
         if !temporarilyHidden { idle.interact(at: ProcessInfo.processInfo.systemUptime); scheduleIdle() }
     }
     func makeMenu() -> NSMenu {
-        let menu = NSMenu(); menu.autoenablesItems = false
-        let refresh = NSMenuItem(title: "刷新额度", action: #selector(manualRefresh), keyEquivalent: "r"); refresh.target = self; menu.addItem(refresh)
-        let hide = NSMenuItem(title: "收起详情", action: #selector(manualRest), keyEquivalent: "h"); hide.target = self; hide.isEnabled = !temporarilyHidden; menu.addItem(hide)
+        let menu = NSMenu(); menu.autoenablesItems = false; menu.minimumWidth = 210
         appendTemporaryVisibilityMenu(to: menu)
+        let refresh = NSMenuItem(title: "刷新额度", action: #selector(manualRefresh), keyEquivalent: "r"); refresh.target = self; menu.addItem(refresh)
+        let hide = NSMenuItem(title: "收起详情", action: #selector(manualRest), keyEquivalent: "h"); hide.target = self; hide.isEnabled = !temporarilyHidden
+        if quotaView?.expanded == true && !temporarilyHidden { menu.addItem(hide) }
         menu.addItem(.separator())
         let rotation = NSMenuItem(title: "自动轮换（每分钟）", action: #selector(toggleAutomaticRotation), keyEquivalent: "")
         rotation.target = self; rotation.state = automaticRotation ? .on : .off; menu.addItem(rotation)
         let choices = NSMenu()
-        choices.autoenablesItems = false
+        choices.autoenablesItems = false; choices.minimumWidth = 240
         for candidate in detectedApps {
             let item = NSMenuItem(title: displayTitle(.standard(candidate)), action: #selector(toggleProviderVisibility(_:)), keyEquivalent: "")
             item.image = accountAvatars[candidate.rawValue] ?? candidate.icon
@@ -375,27 +391,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         let selection = NSMenuItem(title: "显示的应用", action: nil, keyEquivalent: "")
         selection.submenu = choices; menu.addItem(selection)
-        appendAccountMenu(to: menu)
-        let info = NSMenuItem(title: "无操作 15 秒收起详情", action: nil, keyEquivalent: ""); info.isEnabled = false; menu.addItem(info)
-        menu.addItem(.separator())
+        appendAccountMenu(to: menu, inlineAccounts: choices)
+        let settingsMenu = NSMenu(); settingsMenu.autoenablesItems = false; settingsMenu.minimumWidth = 240
         let loginState = demo || testMode ? LoginItemState.disabled : LaunchAtLogin.state
         let login = NSMenuItem(title: loginState.title, action: #selector(toggleLaunchAtLogin), keyEquivalent: "")
         login.target = self; login.state = loginState.checkmark
-        menu.addItem(login)
+        settingsMenu.addItem(login)
         if loginState == .requiresApproval {
             let settings = NSMenuItem(title: "在系统设置中允许自动启动…", action: #selector(openLoginSettings), keyEquivalent: "")
-            settings.target = self; menu.addItem(settings)
+            settings.target = self; settingsMenu.addItem(settings)
         }
-        menu.addItem(.separator())
+        settingsMenu.addItem(.separator())
         let currentVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "未知"
         let versionInfo = NSMenuItem(title: "当前版本：\(currentVersion)", action: nil, keyEquivalent: "")
-        versionInfo.isEnabled = false; menu.addItem(versionInfo)
-        let updates = NSMenuItem(title: appUpdates.menuTitle, action: #selector(openUpdates), keyEquivalent: ""); updates.target = self; updates.isEnabled = !demo && !testMode && appUpdates.canCheck; menu.addItem(updates)
+        versionInfo.isEnabled = false; settingsMenu.addItem(versionInfo)
+        let updates = NSMenuItem(title: appUpdates.menuTitle, action: #selector(openUpdates), keyEquivalent: ""); updates.target = self; updates.isEnabled = !demo && !testMode && appUpdates.canCheck; settingsMenu.addItem(updates)
         let automatic = NSMenuItem(title: "自动检查新版本（每天）", action: #selector(toggleUpdateChecks), keyEquivalent: "")
         automatic.target = self; automatic.state = appUpdates.automaticallyChecks ? .on : .off
         automatic.isEnabled = !demo && !testMode
-        menu.addItem(automatic)
-        let help = NSMenuItem(title: "使用说明 / 反馈问题…", action: #selector(openHelp), keyEquivalent: ""); help.target = self; menu.addItem(help)
+        settingsMenu.addItem(automatic)
+        let help = NSMenuItem(title: "使用说明 / 反馈问题…", action: #selector(openHelp), keyEquivalent: ""); help.target = self; settingsMenu.addItem(help)
+        let settingsRoot = NSMenuItem(title: "设置与更新", action: nil, keyEquivalent: "")
+        settingsRoot.submenu = settingsMenu; menu.addItem(settingsRoot)
         menu.addItem(.separator())
         let quit = NSMenuItem(title: "退出 NotchQuota", action: #selector(quit), keyEquivalent: "q"); quit.target = self; menu.addItem(quit)
         return menu
@@ -460,6 +477,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
             }
             await settle(15.8)
+            for _ in 0..<20 where idleTimer != nil { await settle(0.1) }
             check(panel.isVisible && !idle.active && !quotaView.expanded && provider == .codex, "idle keeps default compact quota")
             check(idleTimer == nil, "idle timer stops")
             let compactFrame = panel.frame
@@ -533,6 +551,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             check(panel.isVisible && provider == .antigravity && !quotaView.expanded && !idle.active, "new install shows compact fallback")
             check(NSApp.windows.filter { $0.isVisible }.count == 1, "only one window and no outline")
             smokeInstalled = Provider.allCases; discoverInstalled(); rest()
+            let mainMenu = makeMenu()
+            let durationMenu = mainMenu.items.first { $0.title == "临时隐藏" }?.submenu
+            check(mainMenu.items.count <= 10 && mainMenu.size.height < (screen?.visibleFrame.height ?? 600) - topHeight - 24, "main menu fits below notch without scrolling")
+            check((durationMenu?.size.width ?? 0) >= 150 && durationMenu?.items.map(\.title) == ["15 分钟", "1 小时", "3 小时", "5 小时"], "duration submenu reserves full label width")
+            print("Menu size: \(mainMenu.size), duration submenu: \(durationMenu?.size ?? .zero)")
             let savedTargets = visibleTargets, savedTarget = target
             let start = Date()
             hideTemporarily(for: 900, now: start)

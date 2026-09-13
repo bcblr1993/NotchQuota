@@ -1,5 +1,6 @@
 import Foundation
 import CryptoKit
+import ImageIO
 
 struct AntigravityInstance: Codable, Hashable {
     var appPath: String
@@ -86,10 +87,27 @@ actor AccountAvatars {
         guard url.scheme == "https", url.user == nil, url.password == nil, url.port == nil || url.port == 443, let host = url.host?.lowercased() else { return false }
         return host.hasSuffix(".googleusercontent.com")
     }
-    private var cache: [URL: (Date, Data?)] = [:]
-    func data(for url: URL?) async -> Data? {
+    private var cache: [URL: (retryAfter: Date, data: Data?)] = [:]
+    private let downloader: (@Sendable (URL) async -> Data?)?
+    init(downloader: (@Sendable (URL) async -> Data?)? = nil) { self.downloader = downloader }
+    func data(for url: URL?, now: Date = Date()) async -> Data? {
         guard let url, Self.allowed(url) else { return nil }
-        if let entry = cache[url], Date().timeIntervalSince(entry.0) < 86400 { return entry.1 }
+        if let entry = cache[url], now < entry.retryAfter { return entry.data }
+        let previous = cache[url]?.data
+        let downloaded: Data?
+        if let downloader { downloaded = await downloader(url) }
+        else { downloaded = await download(url) }
+        let result = downloaded.flatMap { Self.validImage($0) ? $0 : nil }
+        if cache.count >= 32 && cache[url] == nil, let oldest = cache.min(by: { $0.value.retryAfter < $1.value.retryAfter })?.key { cache[oldest] = nil }
+        // Failed requests retry on the next normal refresh after one minute; retain a valid old image.
+        cache[url] = (now.addingTimeInterval(result == nil ? 60 : 86400), result ?? previous)
+        return result ?? previous
+    }
+    static func validImage(_ data: Data) -> Bool {
+        guard !data.isEmpty, data.count <= 1_048_576, let source = CGImageSourceCreateWithData(data as CFData, nil) else { return false }
+        return CGImageSourceCreateThumbnailAtIndex(source, 0, [kCGImageSourceCreateThumbnailFromImageAlways: true, kCGImageSourceThumbnailMaxPixelSize: 48] as CFDictionary) != nil
+    }
+    private func download(_ url: URL) async -> Data? {
         let config = URLSessionConfiguration.ephemeral
         config.timeoutIntervalForRequest = 15; config.timeoutIntervalForResource = 20; config.httpShouldSetCookies = false
         let session = URLSession(configuration: config, delegate: ProviderRedirectGuard(), delegateQueue: nil)
@@ -103,8 +121,6 @@ actor AccountAvatars {
                 result = data
             }
         } catch { result = nil }
-        if cache.count >= 32 { cache.removeAll() }
-        cache[url] = (Date(), result)
         return result
     }
 }

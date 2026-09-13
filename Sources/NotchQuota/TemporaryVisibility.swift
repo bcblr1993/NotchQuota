@@ -57,7 +57,7 @@ extension AppDelegate {
             let restore = NSMenuItem(title: "立即显示", action: #selector(restoreTemporaryVisibility), keyEquivalent: "")
             restore.target = self; menu.addItem(restore)
         }
-        let choices = NSMenu(); choices.autoenablesItems = false
+        let choices = NSMenu(); choices.autoenablesItems = false; choices.minimumWidth = 150
         for duration in Self.hideDurations {
             let item = NSMenuItem(title: duration.title, action: #selector(selectHideDuration(_:)), keyEquivalent: "")
             item.target = self; item.tag = Int(duration.seconds); choices.addItem(item)

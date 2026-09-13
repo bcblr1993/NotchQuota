@@ -29,12 +29,13 @@ actor QuotaReader {
     private let verifyRefresh: Bool
     private var googleIdentity: AccountIdentity?
     private var identityCheckedAt: Date?
+    private var identityVerifiedForFetch = false
     init(googleInstance: AntigravityInstance? = nil, verifyRefresh: Bool = false, session: URLSession? = nil) {
         self.googleInstance = googleInstance; self.verifyRefresh = verifyRefresh
         self.remote = session ?? Self.makeSession()
     }
-    func accountIdentity() -> AccountIdentity? { googleIdentity }
-    func clearGoogleCache() { googleCredential = nil; googleSourceAccess = nil; googleProject = nil; googleIdentity = nil; identityCheckedAt = nil; googleEndpoint = nil; googleClient = nil }
+    func accountIdentity() -> AccountIdentity? { identityVerifiedForFetch ? googleIdentity : nil }
+    func clearGoogleCache() { identityVerifiedForFetch = false; googleCredential = nil; googleSourceAccess = nil; googleProject = nil; googleIdentity = nil; identityCheckedAt = nil; googleEndpoint = nil; googleClient = nil }
 
     private let remote: URLSession
     private static func makeSession() -> URLSession {
@@ -118,6 +119,7 @@ actor QuotaReader {
         throw QuotaError.message("Codex 登录续期失败")
     }
     private func antigravityRemote(expectedSubject: String?) async throws -> Snapshot {
+        identityVerifiedForFetch = false
         let source = try GoogleCredentials.read(instance: googleInstance)
         if googleCredential?.fingerprint != source.fingerprint || googleSourceAccess != source.access {
             googleCredential = source; googleSourceAccess = source.access; googleProject = nil; googleIdentity = nil; identityCheckedAt = nil
@@ -157,6 +159,7 @@ actor QuotaReader {
             googleIdentity = identity; identityCheckedAt = Date()
         }
         if let expectedSubject, googleIdentity?.subject != expectedSubject { throw QuotaError.accountChanged }
+        identityVerifiedForFetch = true
         if googleProject == nil {
             let assist = try await request(base + "loadCodeAssist", headers: headers, body: ["metadata": ["ideType": "ANTIGRAVITY", "platform": "PLATFORM_UNSPECIFIED", "pluginType": "GEMINI"]])
             googleProject = assist["cloudaicompanionProject"] as? String ?? (assist["cloudaicompanionProject"] as? [String: Any])?["id"] as? String

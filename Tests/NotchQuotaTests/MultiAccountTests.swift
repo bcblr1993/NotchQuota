@@ -78,7 +78,7 @@ private final class AccountProtocol: URLProtocol {
             Self.lock.lock(); Self.quotaCalls += 1; Self.lock.unlock()
             value = ["groups": [["displayName": "Gemini", "buckets": [["displayName": "Weekly Limit Remaining", "remainingFraction": subject == "subject-first" ? 0.2 : 0.8]]]]]
         }
-        let code = auth.contains("broken") ? 401 : 200
+        let code = auth.contains("broken") ? 401 : (auth.contains("quota-failed") && !url.path.contains("userinfo") ? 503 : 200)
         client?.urlProtocol(self, didReceive: HTTPURLResponse(url: url, statusCode: code, httpVersion: nil, headerFields: ["Content-Type":"application/json"])!, cacheStoragePolicy: .notAllowed)
         client?.urlProtocol(self, didLoad: try! JSONSerialization.data(withJSONObject: value))
         client?.urlProtocolDidFinishLoading(self)
@@ -118,6 +118,13 @@ final class AccountReaderTests: XCTestCase {
         catch QuotaError.identityUnverified { }
         let unaffected = try await second.fetch(.antigravity)
         XCTAssertEqual(unaffected.remaining, 80)
+        let unverified = await first.accountIdentity(); XCTAssertNil(unverified)
+        _ = try fixture("one", access: "fixture-quota-failed")
+        do { _ = try await first.fetch(.antigravity); XCTFail("Quota should fail") } catch { }
+        let verified = await first.accountIdentity()
+        XCTAssertEqual(verified?.subject, "subject-first", "Verified identity remains available even when quota is unavailable")
+        do { _ = try await first.fetch(.antigravity, expectedGoogleSubject: "subject-second"); XCTFail("Changed account must fail") } catch QuotaError.accountChanged { }
+        let changed = await first.accountIdentity(); XCTAssertNil(changed)
     }
 }
 
