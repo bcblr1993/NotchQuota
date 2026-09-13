@@ -43,6 +43,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var idleTimer: Timer?
     var refreshTimer: Timer?
     var rotationTimer: Timer?
+    var hiddenUntil: Date?
+    var hideTimer: Timer?
     var localMonitor: Any?
     var displayObserver: NSObjectProtocol?
     var powerObservers: [NSObjectProtocol] = []
@@ -85,11 +87,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             excludedProviders = Set((UserDefaults.standard.stringArray(forKey: "excludedProviders") ?? []).compactMap(Provider.init(rawValue:)))
             automaticRotation = UserDefaults.standard.object(forKey: "automaticRotation") as? Bool ?? true
         }
-        if !demo && !testMode { loadAccountPreferences() }
+        if !demo && !testMode { loadAccountPreferences(); loadTemporaryVisibility() }
         updateScreen()
         if demo || testMode { loadDemo() }
         discoverInstalled(); updateView(); show()
-        scheduleIdle()
+        scheduleIdle(); scheduleHideDeadline()
         refreshTimer = Timer.scheduledTimer(withTimeInterval: 180, repeats: true) { [weak self] _ in Task { @MainActor [weak self] in self?.refreshAll() } }
         refreshTimer?.tolerance = 15
         localMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown]) { [weak self] event in
@@ -105,7 +107,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         for name in [NSWorkspace.didWakeNotification, NSWorkspace.screensDidWakeNotification] {
             powerObservers.append(NSWorkspace.shared.notificationCenter.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
-                Task { @MainActor [weak self] in self?.refreshSuspended = false; self?.updateScreen(); self?.refreshAll(); self?.scheduleRotation() }
+                Task { @MainActor [weak self] in self?.refreshSuspended = false; self?.reconcileTemporaryHide(); self?.updateScreen(); self?.refreshAll(); self?.scheduleRotation() }
             })
         }
         refreshAll()
@@ -180,7 +182,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         resize(animated: animated)
     }
     func activity() {
-        guard !installed.isEmpty else { return }
+        guard !temporarilyHidden, !installed.isEmpty else { return }
         collapseWork?.cancel()
         idle.interact(at: ProcessInfo.processInfo.systemUptime)
         scheduleIdle()
@@ -200,7 +202,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
     func show() {
         discoverInstalled()
-        guard !installed.isEmpty else { return }
+        guard !temporarilyHidden, !installed.isEmpty else { return }
         idle.interact(at: ProcessInfo.processInfo.systemUptime)
         scheduleIdle()
         if !panel.isVisible { panel.alphaValue = 0; resize(); panel.orderFrontRegardless() }
@@ -217,7 +219,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         activeMenu?.cancelTracking()
         idleTimer?.invalidate(); idleTimer = nil
         quotaView.expanded = false
-        guard !installed.isEmpty else {
+        guard !temporarilyHidden, !installed.isEmpty else {
             panel.orderOut(nil); return
         }
         updateView(animated: true)
@@ -225,7 +227,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if !panel.isVisible { panel.orderFrontRegardless() }
     }
     func scheduleIdle() {
-        guard idle.active, !installed.isEmpty else { return }
+        guard !temporarilyHidden, idle.active, !installed.isEmpty else { return }
         let remaining = max(0.05, IdleState.delay - (ProcessInfo.processInfo.systemUptime - idle.lastInteraction))
         if let timer = idleTimer, timer.isValid { timer.fireDate = Date().addingTimeInterval(remaining); return }
         idleTimer = Timer(timeInterval: remaining, repeats: false) { [weak self] _ in Task { @MainActor [weak self] in self?.tick() } }
@@ -239,7 +241,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// One low-frequency timer; automatic rotation only displays cached readings.
     func scheduleRotation() {
         rotationTimer?.invalidate(); rotationTimer = nil
-        guard automaticRotation, installed.count > 1, !refreshSuspended else { return }
+        guard !temporarilyHidden, automaticRotation, installed.count > 1, !refreshSuspended else { return }
         rotationTimer = Timer(timeInterval: 60, repeats: true) { [weak self] _ in
             Task { @MainActor [weak self] in self?.rotateAutomatically() }
         }
@@ -247,7 +249,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let rotationTimer { RunLoop.main.add(rotationTimer, forMode: .common) }
     }
     func rotateAutomatically() {
-        guard automaticRotation, !refreshSuspended, !idle.active, !quotaView.expanded, activeMenu == nil else { return }
+        guard !temporarilyHidden, automaticRotation, !refreshSuspended, !idle.active, !quotaView.expanded, activeMenu == nil else { return }
         switchProvider()
     }
     func next() {
@@ -351,12 +353,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let menu = makeMenu(); activeMenu = menu
         NSMenu.popUpContextMenu(menu, with: event, for: quotaView)
         activeMenu = nil
-        idle.interact(at: ProcessInfo.processInfo.systemUptime); scheduleIdle()
+        if !temporarilyHidden { idle.interact(at: ProcessInfo.processInfo.systemUptime); scheduleIdle() }
     }
     func makeMenu() -> NSMenu {
         let menu = NSMenu(); menu.autoenablesItems = false
         let refresh = NSMenuItem(title: "刷新额度", action: #selector(manualRefresh), keyEquivalent: "r"); refresh.target = self; menu.addItem(refresh)
-        let hide = NSMenuItem(title: "收起详情", action: #selector(manualRest), keyEquivalent: "h"); hide.target = self; menu.addItem(hide)
+        let hide = NSMenuItem(title: "收起详情", action: #selector(manualRest), keyEquivalent: "h"); hide.target = self; hide.isEnabled = !temporarilyHidden; menu.addItem(hide)
+        appendTemporaryVisibilityMenu(to: menu)
         menu.addItem(.separator())
         let rotation = NSMenuItem(title: "自动轮换（每分钟）", action: #selector(toggleAutomaticRotation), keyEquivalent: "")
         rotation.target = self; rotation.state = automaticRotation ? .on : .off; menu.addItem(rotation)
@@ -529,6 +532,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             refreshSuspended = false; refreshAll(); await settle()
             check(panel.isVisible && provider == .antigravity && !quotaView.expanded && !idle.active, "new install shows compact fallback")
             check(NSApp.windows.filter { $0.isVisible }.count == 1, "only one window and no outline")
+            smokeInstalled = Provider.allCases; discoverInstalled(); rest()
+            let savedTargets = visibleTargets, savedTarget = target
+            let start = Date()
+            hideTemporarily(for: 900, now: start)
+            check(!panel.isVisible && rotationTimer == nil && idleTimer == nil && hideTimer != nil, "temporary hide stops panel and interaction timers")
+            check(recoveryItem?.menu?.items.contains(where: { $0.action == #selector(restoreTemporaryVisibility) }) == true, "temporary hide has immediate restore menu")
+            show(); rest(); activity(); rotateAutomatically(); refreshAll(); updateScreen(); await settle()
+            check(!panel.isVisible && target == savedTarget && !idle.active, "background refresh and interaction cannot reveal hidden panel")
+            hideTemporarily(for: 3600, now: start)
+            reconcileTemporaryHide(now: start.addingTimeInterval(900))
+            check(temporarilyHidden && !panel.isVisible, "new duration replaces previous deadline")
+            reconcileTemporaryHide(now: start.addingTimeInterval(3600))
+            check(panel.isVisible && !temporarilyHidden && hideTimer == nil && recoveryItem == nil && rotationTimer != nil && visibleTargets == savedTargets, "wake after deadline restores without changing selection")
+            hideTemporarily(for: 18000); restoreTemporaryVisibility()
+            check(panel.isVisible && hiddenUntil == nil && !quotaView.expanded, "immediate restore returns compact view")
+            hideTemporarily(for: 0.1); await settle(1.4)
+            check(!temporarilyHidden && panel.isVisible && hideTimer == nil, "deadline timer restores automatically")
+            hideTemporarily(for: 900); excludedProviders = Set(Provider.allCases); discoverInstalled(); restoreTemporaryVisibility()
+            check(!panel.isVisible && recoveryItem != nil && visibleTargets.isEmpty, "restore respects all accounts disabled")
+            excludedProviders = []; discoverInstalled(); rest(); capture("temporary-hide-restored")
             print("Compact: \(cameraWidth + (cameraWidth > 0 ? 94 : 100)) × \(topHeight)")
             fflush(stdout)
             exit(failures == 0 ? 0 : 1)

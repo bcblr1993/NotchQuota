@@ -103,3 +103,7 @@ NOTCHQUOTA_SMOKE_DIR=/path/to/output build/NotchQuota.app/Contents/MacOS/NotchQu
 项目原创代码采用 [MIT](LICENSE) 许可证。应用图标及相关商标属于各自权利人，详见 [第三方声明](THIRD_PARTY_NOTICES.md)。
 
 开发者可使用独立的[性能采样工具](docs/PERFORMANCE.md)做本机观察；应用本身不上传性能遥测。
+
+### 临时隐藏
+
+右键 → 临时隐藏 → 15 分钟 / 1 小时 / 3 小时 / 5 小时。隐藏期间点击菜单栏的眼睛图标，选择“立即显示”可提前恢复；重新选择时长会从当前时间重新计时。截止时间跨重启保留，休眠后按实际时间恢复。账号选择保持不变，全部账号被关闭时不会强制显示。
