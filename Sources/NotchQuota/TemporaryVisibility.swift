@@ -52,7 +52,7 @@ extension AppDelegate {
     func appendTemporaryVisibilityMenu(to menu: NSMenu) {
         if let hiddenUntil {
             let time = DateFormatter.localizedString(from: hiddenUntil, dateStyle: .none, timeStyle: .short)
-            let info = NSMenuItem(title: "已临时隐藏，\(time) 恢复", action: nil, keyEquivalent: "")
+            let info = NSMenuItem(title: "隐藏至 \(time) · 点击 Dock 可恢复", action: nil, keyEquivalent: "")
             info.isEnabled = false; menu.addItem(info)
             let restore = NSMenuItem(title: "立即显示", action: #selector(restoreTemporaryVisibility), keyEquivalent: "")
             restore.target = self; menu.addItem(restore)

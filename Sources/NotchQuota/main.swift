@@ -116,7 +116,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if animationTestMode { runAnimationTest() }
         else if testMode { runUISmoke() }
     }
-    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool { show(); return true }
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        if temporarilyHidden { restoreTemporaryVisibility() }
+        else { show() }
+        return false
+    }
     func loadDemo() {
         for (p, values) in [(Provider.codex, [82.0, 91]), (.claude, [36.0, 64]), (.antigravity, [12.0, 75, 63, 88])] {
             states[.standard(p)] = DisplayState(snapshot: Snapshot(windows: values.enumerated().map { i, value in
@@ -570,6 +574,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             check(panel.isVisible && !temporarilyHidden && hideTimer == nil && recoveryItem == nil && rotationTimer != nil && visibleTargets == savedTargets, "wake after deadline restores without changing selection")
             hideTemporarily(for: 18000); restoreTemporaryVisibility()
             check(panel.isVisible && hiddenUntil == nil && !quotaView.expanded, "immediate restore returns compact view")
+            hideTemporarily(for: 900)
+            _ = applicationShouldHandleReopen(NSApp, hasVisibleWindows: false)
+            check(panel.isVisible && hiddenUntil == nil && hideTimer == nil, "reopening app immediately restores hidden panel")
             hideTemporarily(for: 0.1); await settle(1.4)
             check(!temporarilyHidden && panel.isVisible && hideTimer == nil, "deadline timer restores automatically")
             hideTemporarily(for: 900); excludedProviders = Set(Provider.allCases); discoverInstalled(); restoreTemporaryVisibility()

@@ -152,6 +152,12 @@ extension AppDelegate {
         let alert = NSAlert(); alert.messageText = message; alert.addButton(withTitle: "好"); alert.runModal()
     }
     func updateRecoveryItem() {
+        // Crowded menu bars may conceal status items behind the camera notch.
+        // While hidden, the Dock provides an independent, visible recovery route.
+        if !testMode, !demo, let application = NSApp {
+            let policy: NSApplication.ActivationPolicy = temporarilyHidden ? .regular : .accessory
+            if application.activationPolicy() != policy { application.setActivationPolicy(policy) }
+        }
         let needsRecovery = temporarilyHidden || (visibleTargets.isEmpty && (!detectedApps.isEmpty || !instances.isEmpty))
         if needsRecovery && recoveryItem == nil {
             let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
