@@ -158,7 +158,7 @@ extension AppDelegate {
             let policy: NSApplication.ActivationPolicy = temporarilyHidden ? .regular : .accessory
             if application.activationPolicy() != policy { application.setActivationPolicy(policy) }
         }
-        let needsRecovery = temporarilyHidden || (visibleTargets.isEmpty && (!detectedApps.isEmpty || !instances.isEmpty))
+        let needsRecovery = displayMode == .island && (temporarilyHidden || (visibleTargets.isEmpty && (!detectedApps.isEmpty || !instances.isEmpty)))
         if needsRecovery && recoveryItem == nil {
             let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
             item.button?.image = NSImage(systemSymbolName: "slider.horizontal.3", accessibilityDescription: "NotchQuota 账号设置")
@@ -168,5 +168,6 @@ extension AppDelegate {
         else if needsRecovery { recoveryItem?.menu = makeMenu() }
         recoveryItem?.button?.image = NSImage(systemSymbolName: temporarilyHidden ? "eye.slash" : "slider.horizontal.3", accessibilityDescription: "NotchQuota 设置")
         recoveryItem?.button?.toolTip = temporarilyHidden ? "NotchQuota · 临时隐藏，点击可立即显示" : "NotchQuota · 选择显示的账号"
+        updateMenuBarPresentation()
     }
 }

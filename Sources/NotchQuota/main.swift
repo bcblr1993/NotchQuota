@@ -26,6 +26,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let instanceDiscovery = AntigravityDiscovery()
     let avatarLoader = AccountAvatars()
     var recoveryItem: NSStatusItem?
+    var displayMode: DisplayMode = .island
+    var quotaStatusItem: NSStatusItem?
+    var overviewPopover: NSPopover?
+    let overviewModel = OverviewModel()
+    var overviewTimer: Timer?
 
     var detectedApps: [Provider] = []
     var excludedProviders: Set<Provider> = []
@@ -81,13 +86,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         appUpdates.onChange = { [weak self] version in
             self?.quotaView.updateVersion = version
             self?.quotaView.update()
+            self?.updateMenuBarPresentation()
         }
         if !demo && !testMode { appUpdates.start() }
         if !demo && !testMode {
             excludedProviders = Set((UserDefaults.standard.stringArray(forKey: "excludedProviders") ?? []).compactMap(Provider.init(rawValue:)))
             automaticRotation = UserDefaults.standard.object(forKey: "automaticRotation") as? Bool ?? true
         }
-        if !demo && !testMode { loadAccountPreferences(); loadTemporaryVisibility() }
+        if !demo && !testMode { loadAccountPreferences(); loadTemporaryVisibility(); loadDisplayMode() }
         updateScreen()
         if demo || testMode { loadDemo() }
         discoverInstalled(); updateView(); show()
@@ -103,7 +109,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         displayObserver = NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main) { [weak self] _ in Task { @MainActor [weak self] in self?.updateScreen() } }
         for name in [NSWorkspace.willSleepNotification, NSWorkspace.screensDidSleepNotification] {
             powerObservers.append(NSWorkspace.shared.notificationCenter.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
-                Task { @MainActor [weak self] in self?.refreshSuspended = true; self?.scheduleRotation() }
+                Task { @MainActor [weak self] in self?.refreshSuspended = true; self?.closeOverview(); self?.scheduleRotation() }
             })
         }
         for name in [NSWorkspace.didWakeNotification, NSWorkspace.screensDidWakeNotification] {
@@ -118,6 +124,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         if temporarilyHidden { restoreTemporaryVisibility() }
+        else if displayMode == .menuBar { showOverview() }
         else { show() }
         return false
     }
@@ -129,6 +136,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
     func updateScreen() {
+        closeOverview()
         screen = NSScreen.screens.first(where: { $0.safeAreaInsets.top > 0 }) ?? NSScreen.main ?? NSScreen.screens.first
         guard let screen else { return }
         topHeight = max(28, screen.safeAreaInsets.top)
@@ -138,7 +146,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         resize()
     }
     func resize(animated: Bool = false) {
-        guard let screen, panel != nil else { return }
+        guard displayMode == .island, let screen, panel != nil else { return }
         let compact = cameraWidth > 0 ? cameraWidth + 94 : 100
         let expanded = quotaView.expanded
         let width = expanded ? max(276, compact) : compact
@@ -175,6 +183,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         updateView()
     }
     func updateView(animated: Bool = false) {
+        if displayMode == .menuBar { updateMenuBarPresentation(); return }
         quotaView.provider = provider
         quotaView.nextProviderTitle = nextTarget().map(displayTitle)
         quotaView.accountTitle = provider == .antigravity && (target.instance != nil || visibleTargets.filter { $0.provider == .antigravity }.count > 1) ? accountLabel(target) : nil
@@ -187,6 +196,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         resize(animated: animated)
     }
     func activity() {
+        guard displayMode == .island else { return }
         guard !temporarilyHidden, !installed.isEmpty else { return }
         collapseWork?.cancel()
         idle.interact(at: ProcessInfo.processInfo.systemUptime)
@@ -199,6 +209,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         hoverWork = work; DispatchQueue.main.asyncAfter(deadline: .now() + 0.55, execute: work)
     }
     func leave() {
+        guard displayMode == .island else { return }
         suppressHoverUntilExit = false
         hoverWork?.cancel(); hoverWork = nil
         collapseWork?.cancel()
@@ -207,6 +218,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
     func show() {
         discoverInstalled()
+        if displayMode == .menuBar { updateMenuBarPresentation(); return }
         guard !temporarilyHidden, !installed.isEmpty else { return }
         idle.interact(at: ProcessInfo.processInfo.systemUptime)
         scheduleIdle()
@@ -224,6 +236,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         activeMenu?.cancelTracking()
         idleTimer?.invalidate(); idleTimer = nil
         quotaView.expanded = false
+        if displayMode == .menuBar { panel.orderOut(nil); closeOverview(); updateMenuBarPresentation(); return }
         guard !temporarilyHidden, !installed.isEmpty else {
             panel.orderOut(nil); return
         }
@@ -232,7 +245,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if !panel.isVisible { panel.orderFrontRegardless() }
     }
     func scheduleIdle() {
-        guard !temporarilyHidden, idle.active, !installed.isEmpty else { return }
+        guard displayMode == .island, !temporarilyHidden, idle.active, !installed.isEmpty else { return }
         let remaining = max(0.05, IdleState.delay - (ProcessInfo.processInfo.systemUptime - idle.lastInteraction))
         if let timer = idleTimer, timer.isValid { timer.fireDate = Date().addingTimeInterval(remaining); return }
         idleTimer = Timer(timeInterval: remaining, repeats: false) { [weak self] _ in Task { @MainActor [weak self] in self?.tick() } }
@@ -254,7 +267,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let rotationTimer { RunLoop.main.add(rotationTimer, forMode: .common) }
     }
     func rotateAutomatically() {
-        guard !temporarilyHidden, automaticRotation, !refreshSuspended, !idle.active, !quotaView.expanded, activeMenu == nil else { return }
+        guard !temporarilyHidden, automaticRotation, !refreshSuspended, activeMenu == nil else { return }
+        if displayMode == .island && (idle.active || quotaView.expanded) { return }
         switchProvider()
     }
     func next() {
@@ -274,6 +288,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         updateView(animated: true)
     }
     func toggleExpanded() {
+        guard displayMode == .island else { showOverview(); return }
         hoverWork?.cancel(); hoverWork = nil
         quotaView.expanded.toggle()
         suppressHoverUntilExit = !quotaView.expanded
@@ -297,7 +312,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let last = lastAttempt[candidate], Date().timeIntervalSince(last) < 30 { return }
         lastAttempt[candidate] = Date()
         var state = states[candidate] ?? DisplayState(); state.loading = true; states[candidate] = state
-        if candidate == target { updateView(animated: true) }
+        if candidate == target || displayMode == .menuBar { updateView(animated: true) }
         let generation = accountGenerations[candidate.id, default: 0]
         let accountReader: QuotaReader
         if let instance = candidate.instance {
@@ -321,7 +336,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     self.saveAccountPreferences()
                 }
                 self.states[candidate] = DisplayState(snapshot: snapshot)
-                if candidate == self.target { self.updateView(animated: true) }
+                if candidate == self.target || self.displayMode == .menuBar { self.updateView(animated: true) }
                 if let identity { await self.updateAccountAvatar(identity, for: candidate, generation: generation) }
             } catch {
                 guard let self, !Task.isCancelled, self.accountGenerations[candidate.id, default: 0] == generation else { return }
@@ -335,14 +350,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     self.states[candidate] = DisplayState(); self.accountNames[candidate.id] = nil; self.accountAvatars[candidate.id] = nil
                 }
                 var failed = self.states[candidate] ?? DisplayState(); failed.loading = false; failed.error = self.readableError(error); self.states[candidate] = failed
-                if candidate == self.target { self.updateView(animated: true) }
+                if candidate == self.target || self.displayMode == .menuBar { self.updateView(animated: true) }
                 if candidate.provider == .antigravity, let identity = await accountReader.accountIdentity(),
                    self.accountBindings[candidate.id] == nil || self.accountBindings[candidate.id] == identity.subject {
                     guard !Task.isCancelled, self.visibleTargets.contains(candidate), self.accountGenerations[candidate.id, default: 0] == generation else { return }
                     self.accountBindings[candidate.id] = identity.subject
                     self.accountNames[candidate.id] = identity.displayName
                     self.saveAccountPreferences()
-                    if candidate == self.target { self.updateView() }
+                    if candidate == self.target || self.displayMode == .menuBar { self.updateView() }
                     await self.updateAccountAvatar(identity, for: candidate, generation: generation)
                 }
             }
@@ -356,7 +371,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             guard let image = AvatarImage.make(data) else { return }
             accountAvatars[candidate.id] = image; avatarHashes[candidate.id] = data.hashValue
         }
-        if candidate == target { updateView() }
+        if candidate == target || displayMode == .menuBar { updateView() }
     }
     func readableError(_ error: Error) -> String {
         if let error = error as? QuotaError { return error.localizedDescription }
@@ -397,6 +412,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         selection.submenu = choices; menu.addItem(selection)
         appendAccountMenu(to: menu, inlineAccounts: choices)
         let settingsMenu = NSMenu(); settingsMenu.autoenablesItems = false; settingsMenu.minimumWidth = 240
+        appendDisplayModeItems(to: settingsMenu)
         let loginState = demo || testMode ? LoginItemState.disabled : LaunchAtLogin.state
         let login = NSMenuItem(title: loginState.title, action: #selector(toggleLaunchAtLogin), keyEquivalent: "")
         login.target = self; login.state = loginState.checkmark
@@ -582,6 +598,44 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             hideTemporarily(for: 900); excludedProviders = Set(Provider.allCases); discoverInstalled(); restoreTemporaryVisibility()
             check(!panel.isVisible && recoveryItem != nil && visibleTargets.isEmpty, "restore respects all accounts disabled")
             excludedProviders = []; discoverInstalled(); rest(); capture("temporary-hide-restored")
+            let beforeModeAttempts = lastAttempt
+            setDisplayMode(.menuBar); await settle()
+            check(!panel.isVisible && quotaStatusItem != nil && recoveryItem == nil, "menu bar mode owns one status item and no notch panel")
+            show(); rest(); activity(); updateView(); refreshAll(); await settle()
+            check(!panel.isVisible && idleTimer == nil && lastAttempt == beforeModeAttempts, "menu mode background updates do not reveal notch or add requests")
+            showOverview(); await settle(0.6)
+            check(overviewPopover?.isShown == true && overviewModel.accounts.count == 1 && overviewModel.accounts.first?.id == target.id, "overview opens only current account")
+            check(overviewTimer != nil, "overview uses one minute display timer")
+            if let view = overviewPopover?.contentViewController?.view { capture("menu-overview", view: view) }
+            let clickedTarget = target
+            overviewModel.next(); await settle()
+            check(target != clickedTarget && overviewModel.accounts.first?.id == target.id, "account icon switches detail and status together")
+            let loopStart = target
+            for _ in visibleTargets { overviewModel.next() }
+            await settle(0.6)
+            check(target == loopStart, "account icon cycles all selected accounts")
+            if let view = overviewPopover?.contentViewController?.view { capture("menu-single-detail", view: view) }
+            let selectedAccounts = visibleTargets
+            visibleTargets = [target]; updateOverview()
+            let onlyAccount = target; let attemptsBeforeClick = lastAttempt
+            overviewModel.next()
+            check(target == onlyAccount && lastAttempt == attemptsBeforeClick, "single account icon does not switch or query")
+            visibleTargets = selectedAccounts; updateOverview()
+            let beforeRotation = target; rotateAutomatically()
+            check(target != beforeRotation && overviewPopover?.isShown == true, "menu bar rotates while overview stays open")
+            check(overviewModel.accounts.first?.id == target.id && overviewModel.accounts.count == 1, "automatic rotation updates single account detail")
+            closeOverview(); await settle()
+            check(overviewTimer == nil, "closed overview stops display timer")
+            showOverview(); await settle()
+            print("Popover delegate retained: \(overviewPopover?.delegate === self)")
+            overviewPopover?.close(); await settle(0.8)
+            check(overviewTimer == nil, "native popover dismissal stops display timer")
+            hideTemporarily(for: 900); await settle()
+            check(!panel.isVisible && quotaStatusItem != nil && recoveryItem == nil && overviewPopover?.isShown != true, "hidden menu mode keeps one recovery entry")
+            restoreTemporaryVisibility(); await settle()
+            check(!panel.isVisible && quotaStatusItem != nil && hiddenUntil == nil, "restoring menu mode never opens notch")
+            setDisplayMode(.island); await settle()
+            check(panel.isVisible && quotaStatusItem == nil && overviewTimer == nil, "switching back restores island without duplicate entry")
             print("Compact: \(cameraWidth + (cameraWidth > 0 ? 94 : 100)) × \(topHeight)")
             fflush(stdout)
             exit(failures == 0 ? 0 : 1)
