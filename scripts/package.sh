@@ -16,7 +16,10 @@ cp docs/安装说明.txt "$STAGE/安装说明.txt"
 hdiutil create -volname NotchQuota -srcfolder "$STAGE" -ov -format UDZO "$OUT/$NAME.dmg" >/dev/null
 if [ -n "${SIGNING_IDENTITY:-}" ]; then codesign --force --timestamp --sign "$SIGNING_IDENTITY" "$OUT/$NAME.dmg"; fi
 if [ -n "${NOTARY_PROFILE:-}" ]; then
-  xcrun notarytool submit "$OUT/$NAME.dmg" --keychain-profile "$NOTARY_PROFILE" --wait --timeout 10m --output-format json > "$OUT/notarization.json"
+  # Use a byte-identical temporary copy to avoid local preflight file-open stalls.
+  cp "$OUT/$NAME.dmg" "$STAGE/$NAME.dmg"
+  cmp -s "$OUT/$NAME.dmg" "$STAGE/$NAME.dmg"
+  xcrun notarytool submit "$STAGE/$NAME.dmg" --keychain-profile "$NOTARY_PROFILE" --wait --timeout 10m --output-format json > "$OUT/notarization.json"
   python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print("Notarization:", d.get("status")); sys.exit(0 if d.get("status")=="Accepted" else 1)' "$OUT/notarization.json"
   xcrun stapler staple "$OUT/$NAME.dmg"
   xcrun stapler validate "$OUT/$NAME.dmg"
