@@ -2,8 +2,8 @@ import AppKit
 import SwiftUI
 
 enum DisplayMode: String, CaseIterable {
-    case island, menuBar
-    var title: String { self == .island ? "灵动岛模式" : "菜单栏模式" }
+    case island, menuBar, sidebar
+    var title: String { switch self { case .island: return "灵动岛模式"; case .menuBar: return "菜单栏模式"; case .sidebar: return "侧边栏模式" } }
     static func restored(_ saved: String?, majorVersion: Int) -> Self {
         saved.flatMap(Self.init(rawValue:)) ?? (majorVersion >= 27 ? .menuBar : .island)
     }
@@ -37,7 +37,8 @@ extension AppDelegate: NSPopoverDelegate {
     }
     func setDisplayMode(_ mode: DisplayMode) {
         activeMenu?.cancelTracking()
-        closeOverview()
+        closeOverview(); sidebar?.hide()
+        overviewModel.sidebarMode = mode == .sidebar
         hoverWork?.cancel(); hoverWork = nil; collapseWork?.cancel()
         idleTimer?.invalidate(); idleTimer = nil; idle.active = false
         quotaView.expanded = false; panel.orderOut(nil)
@@ -108,7 +109,7 @@ extension AppDelegate: NSPopoverDelegate {
                 subtitle: accountNames[candidate.id] ?? (candidate.provider == .antigravity ? "账号信息读取中" : ""),
                 image: accountAvatars[candidate.id] ?? candidate.provider.icon, state: states[candidate] ?? DisplayState())
         }
-        resizeOverview()
+        if displayMode == .menuBar { resizeOverview() }
     }
     func resizeOverview() {
         let state = states[target] ?? DisplayState()

@@ -158,7 +158,7 @@ extension AppDelegate {
             let policy: NSApplication.ActivationPolicy = temporarilyHidden ? .regular : .accessory
             if application.activationPolicy() != policy { application.setActivationPolicy(policy) }
         }
-        let needsRecovery = displayMode == .island && (temporarilyHidden || (visibleTargets.isEmpty && (!detectedApps.isEmpty || !instances.isEmpty)))
+        let needsRecovery = displayMode != .menuBar && (temporarilyHidden || (visibleTargets.isEmpty && (!detectedApps.isEmpty || !instances.isEmpty)))
         if needsRecovery && recoveryItem == nil {
             let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
             item.button?.image = NSImage(systemSymbolName: "slider.horizontal.3", accessibilityDescription: "NotchQuota 账号设置")

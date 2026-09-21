@@ -3,10 +3,11 @@ import Darwin
 
 // Developer-only, bounded external sampler. Never reads app memory, credentials or URLs.
 let args = CommandLine.arguments
+let requestedPID = args.count > 3 ? Int32(args[3]) : nil
 let duration = min(600, max(1, Double(args.dropFirst().first ?? "240") ?? 240))
 let interval = min(60, max(1, Double(args.dropFirst(2).first ?? "10") ?? 10))
 let executable = "/Applications/NotchQuota.app/Contents/MacOS/NotchQuota"
-let version = Bundle(path: "/Applications/NotchQuota.app")?.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "unknown"
+let version = requestedPID != nil ? "developer-test" : Bundle(path: "/Applications/NotchQuota.app")?.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "unknown"
 func emit(_ value: [String: Any]) {
     if let data = try? JSONSerialization.data(withJSONObject: value, options: [.sortedKeys]), let text = String(data: data, encoding: .utf8) { print(text); fflush(stdout) }
 }
@@ -26,7 +27,7 @@ func usage(_ pid: pid_t) -> rusage_info_v2? {
     }
     return result == 0 ? value : nil
 }
-guard let pid = findPID(), var previous = usage(pid) else { emit(["event": "not_running", "timestamp": Date().timeIntervalSince1970, "version": version]); exit(0) }
+guard let pid = requestedPID ?? findPID(), var previous = usage(pid) else { emit(["event": "not_running", "timestamp": Date().timeIntervalSince1970, "version": version]); exit(0) }
 let started = ProcessInfo.processInfo.systemUptime
 var lastTime = started
 emit(["event": "start", "timestamp": Date().timeIntervalSince1970, "pid": pid, "version": version, "interval_s": interval, "duration_s": duration])

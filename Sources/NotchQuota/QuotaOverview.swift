@@ -46,6 +46,9 @@ struct OverviewAccount: Identifiable {
     @Published var now = Date()
     @Published var position = 1
     @Published var total = 1
+    @Published var sidebarMode = false
+    @Published var pinned = false
+    var pin: () -> Void = {}
     var next: () -> Void = {}
     var refresh: () -> Void = {}
     var settings: () -> Void = {}
@@ -58,11 +61,11 @@ struct QuotaOverview: View {
         VStack(spacing: 0) {
             if let account = model.accounts.first {
                 HStack(spacing: 8) {
-                    Button(action: model.next) {
+                    Button(action: model.sidebarMode ? model.pin : model.next) {
                         Image(nsImage: account.image).resizable().scaledToFit().frame(width: 20, height: 20)
                             .frame(width: 28, height: 28).contentShape(Rectangle())
-                    }.buttonStyle(.plain).disabled(model.total < 2)
-                        .help(model.total > 1 ? "点击切换下一个账号" : "当前只有一个账号")
+                    }.buttonStyle(.plain).disabled(model.total < 2 && !model.sidebarMode)
+                        .help(model.sidebarMode ? "固定或取消固定详情" : (model.total > 1 ? "点击切换下一个账号" : "当前只有一个账号"))
                         .accessibilityLabel("切换账号")
                     VStack(alignment: .leading, spacing: 3) {
                         Text(account.title).font(.system(size: 12, weight: .semibold)).lineLimit(1)
@@ -72,6 +75,9 @@ struct QuotaOverview: View {
                         }
                     }
                     Spacer(minLength: 4)
+                    if model.sidebarMode {
+                        Button(action: model.pin) { Image(systemName: model.pinned ? "pin.fill" : "pin") }.help(model.pinned ? "取消固定" : "固定详情")
+                    }
                     Button(action: model.refresh) { Image(systemName: "arrow.clockwise") }.help("刷新额度")
                     Button(action: model.settings) { Image(systemName: "gearshape") }.help("设置")
                 }.buttonStyle(.borderless).font(.system(size: 12)).frame(minHeight: 32).padding(.horizontal, 12).padding(.vertical, 10)
@@ -112,7 +118,7 @@ struct QuotaOverview: View {
                 }
                 Divider()
                 HStack {
-                    Text(model.total > 1 ? "点击头像切换 · \(model.position)/\(model.total)" : "当前账号")
+                    Text(model.sidebarMode ? (model.pinned ? "已固定 · 点击图钉取消" : "点击侧栏图标固定详情") : (model.total > 1 ? "点击头像切换 · \(model.position)/\(model.total)" : "当前账号"))
                     Spacer()
                     if let date = account.state.snapshot?.fetchedAt {
                         Text("更新于 \(date.formatted(date: .omitted, time: .shortened))")
@@ -122,8 +128,17 @@ struct QuotaOverview: View {
                 Text("暂无显示的账号").foregroundStyle(.secondary).padding(24)
             }
         }
-        .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: model.accounts.first?.id)
+        .animation(reduceMotion || model.sidebarMode ? nil : .easeInOut(duration: 0.2), value: model.accounts.first?.id)
         .frame(width: OverviewLayout.width)
-        .background(Color(nsColor: .windowBackgroundColor))
+         .background {
+            if model.sidebarMode {
+                LinearGradient(colors: [Color(red: 0.085, green: 0.095, blue: 0.13), Color(red: 0.045, green: 0.05, blue: 0.065)], startPoint: .topLeading, endPoint: .bottomTrailing)
+            } else { Color(nsColor: .windowBackgroundColor) }
+        }
+        .overlay {
+            if model.sidebarMode {
+                RoundedRectangle(cornerRadius: 16).strokeBorder(Color.white.opacity(0.10), lineWidth: 0.5).allowsHitTesting(false)
+            }
+        }
     }
 }

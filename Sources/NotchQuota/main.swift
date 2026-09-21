@@ -31,6 +31,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var overviewPopover: NSPopover?
     let overviewModel = OverviewModel()
     var overviewTimer: Timer?
+    var sidebar: SidebarController?
 
     var detectedApps: [Provider] = []
     var excludedProviders: Set<Provider> = []
@@ -63,7 +64,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var cameraWidth: CGFloat = 0
     var demo = CommandLine.arguments.contains("--demo")
     let animationTestMode = CommandLine.arguments.contains("--animation-test")
-    var testMode: Bool { animationTestMode || CommandLine.arguments.contains("--ui-smoke") }
+    var testMode: Bool { animationTestMode || CommandLine.arguments.contains("--ui-smoke") || CommandLine.arguments.contains("--sidebar-test") }
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
         if !demo && !testMode {
@@ -109,7 +110,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         displayObserver = NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main) { [weak self] _ in Task { @MainActor [weak self] in self?.updateScreen() } }
         for name in [NSWorkspace.willSleepNotification, NSWorkspace.screensDidSleepNotification] {
             powerObservers.append(NSWorkspace.shared.notificationCenter.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
-                Task { @MainActor [weak self] in self?.refreshSuspended = true; self?.closeOverview(); self?.scheduleRotation() }
+                Task { @MainActor [weak self] in self?.refreshSuspended = true; self?.closeOverview(); self?.sidebar?.hide(); self?.scheduleRotation() }
             })
         }
         for name in [NSWorkspace.didWakeNotification, NSWorkspace.screensDidWakeNotification] {
@@ -117,9 +118,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 Task { @MainActor [weak self] in self?.refreshSuspended = false; self?.reconcileTemporaryHide(); self?.updateScreen(); self?.refreshAll(); self?.scheduleRotation() }
             })
         }
+        powerObservers.append(NotificationCenter.default.addObserver(forName: .NSProcessInfoPowerStateDidChange, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor [weak self] in self?.updateView() }
+        })
+        powerObservers.append(NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor [weak self] in self?.updateView() }
+        })
         refreshAll()
         if !demo && !testMode { scanInstances() }
-        if animationTestMode { runAnimationTest() }
+        if CommandLine.arguments.contains("--sidebar-test") { runSidebarTest() }
+        else if animationTestMode { runAnimationTest() }
         else if testMode { runUISmoke() }
     }
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
@@ -136,7 +144,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
     func updateScreen() {
-        closeOverview()
+        closeOverview(); sidebar?.screenChanged()
         screen = NSScreen.screens.first(where: { $0.safeAreaInsets.top > 0 }) ?? NSScreen.main ?? NSScreen.screens.first
         guard let screen else { return }
         topHeight = max(28, screen.safeAreaInsets.top)
@@ -183,6 +191,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         updateView()
     }
     func updateView(animated: Bool = false) {
+        if displayMode == .sidebar { updateSidebar(); return }
         if displayMode == .menuBar { updateMenuBarPresentation(); return }
         quotaView.provider = provider
         quotaView.nextProviderTitle = nextTarget().map(displayTitle)
@@ -218,6 +227,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
     func show() {
         discoverInstalled()
+        if displayMode == .sidebar { updateSidebar(); return }
         if displayMode == .menuBar { updateMenuBarPresentation(); return }
         guard !temporarilyHidden, !installed.isEmpty else { return }
         idle.interact(at: ProcessInfo.processInfo.systemUptime)
@@ -236,6 +246,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         activeMenu?.cancelTracking()
         idleTimer?.invalidate(); idleTimer = nil
         quotaView.expanded = false
+        if displayMode == .sidebar { panel.orderOut(nil); sidebar?.dismiss(animated: false); updateSidebar(); return }
         if displayMode == .menuBar { panel.orderOut(nil); closeOverview(); updateMenuBarPresentation(); return }
         guard !temporarilyHidden, !installed.isEmpty else {
             panel.orderOut(nil); return
@@ -259,7 +270,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// One low-frequency timer; automatic rotation only displays cached readings.
     func scheduleRotation() {
         rotationTimer?.invalidate(); rotationTimer = nil
-        guard !temporarilyHidden, automaticRotation, installed.count > 1, !refreshSuspended else { return }
+        guard displayMode != .sidebar, !temporarilyHidden, automaticRotation, installed.count > 1, !refreshSuspended else { return }
         rotationTimer = Timer(timeInterval: 60, repeats: true) { [weak self] _ in
             Task { @MainActor [weak self] in if self?.testMode == false { self?.rotateAutomatically() } }
         }
@@ -267,7 +278,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let rotationTimer { RunLoop.main.add(rotationTimer, forMode: .common) }
     }
     func rotateAutomatically() {
-        guard !temporarilyHidden, automaticRotation, !refreshSuspended, activeMenu == nil else { return }
+        guard displayMode != .sidebar, !temporarilyHidden, automaticRotation, !refreshSuspended, activeMenu == nil else { return }
         if displayMode == .island && (idle.active || quotaView.expanded) { return }
         switchProvider()
     }
@@ -312,7 +323,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let last = lastAttempt[candidate], Date().timeIntervalSince(last) < 30 { return }
         lastAttempt[candidate] = Date()
         var state = states[candidate] ?? DisplayState(); state.loading = true; states[candidate] = state
-        if candidate == target || displayMode == .menuBar { updateView(animated: true) }
+        if candidate == target || displayMode != .island { updateView(animated: true) }
         let generation = accountGenerations[candidate.id, default: 0]
         let accountReader: QuotaReader
         if let instance = candidate.instance {
@@ -336,7 +347,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     self.saveAccountPreferences()
                 }
                 self.states[candidate] = DisplayState(snapshot: snapshot)
-                if candidate == self.target || self.displayMode == .menuBar { self.updateView(animated: true) }
+                if candidate == self.target || self.displayMode != .island { self.updateView(animated: true) }
                 if let identity { await self.updateAccountAvatar(identity, for: candidate, generation: generation) }
             } catch {
                 guard let self, !Task.isCancelled, self.accountGenerations[candidate.id, default: 0] == generation else { return }
@@ -350,14 +361,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     self.states[candidate] = DisplayState(); self.accountNames[candidate.id] = nil; self.accountAvatars[candidate.id] = nil
                 }
                 var failed = self.states[candidate] ?? DisplayState(); failed.loading = false; failed.error = self.readableError(error); self.states[candidate] = failed
-                if candidate == self.target || self.displayMode == .menuBar { self.updateView(animated: true) }
+                if candidate == self.target || self.displayMode != .island { self.updateView(animated: true) }
                 if candidate.provider == .antigravity, let identity = await accountReader.accountIdentity(),
                    self.accountBindings[candidate.id] == nil || self.accountBindings[candidate.id] == identity.subject {
                     guard !Task.isCancelled, self.visibleTargets.contains(candidate), self.accountGenerations[candidate.id, default: 0] == generation else { return }
                     self.accountBindings[candidate.id] = identity.subject
                     self.accountNames[candidate.id] = identity.displayName
                     self.saveAccountPreferences()
-                    if candidate == self.target || self.displayMode == .menuBar { self.updateView() }
+                    if candidate == self.target || self.displayMode != .island { self.updateView() }
                     await self.updateAccountAvatar(identity, for: candidate, generation: generation)
                 }
             }
@@ -371,7 +382,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             guard let image = AvatarImage.make(data) else { return }
             accountAvatars[candidate.id] = image; avatarHashes[candidate.id] = data.hashValue
         }
-        if candidate == target || displayMode == .menuBar { updateView() }
+        if candidate == target || displayMode != .island { updateView() }
     }
     func readableError(_ error: Error) -> String {
         if let error = error as? QuotaError { return error.localizedDescription }
@@ -397,7 +408,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if quotaView?.expanded == true && !temporarilyHidden { menu.addItem(hide) }
         menu.addItem(.separator())
         let rotation = NSMenuItem(title: "自动轮换（每分钟）", action: #selector(toggleAutomaticRotation), keyEquivalent: "")
-        rotation.target = self; rotation.state = automaticRotation ? .on : .off; menu.addItem(rotation)
+        rotation.target = self; rotation.state = automaticRotation ? .on : .off
+        if displayMode != .sidebar { menu.addItem(rotation) }
         let choices = NSMenu()
         choices.autoenablesItems = false; choices.minimumWidth = 240
         for candidate in detectedApps {
@@ -413,6 +425,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         appendAccountMenu(to: menu, inlineAccounts: choices)
         let settingsMenu = NSMenu(); settingsMenu.autoenablesItems = false; settingsMenu.minimumWidth = 240
         appendDisplayModeItems(to: settingsMenu)
+        if displayMode == .sidebar {
+            let collapse = NSMenuItem(title: "闲置时收成小胶囊", action: #selector(toggleSidebarCollapse), keyEquivalent: "")
+            collapse.target = self; collapse.state = sidebar?.autoCollapse == true ? .on : .off
+            settingsMenu.addItem(collapse); settingsMenu.addItem(.separator())
+        }
         let loginState = demo || testMode ? LoginItemState.disabled : LaunchAtLogin.state
         let login = NSMenuItem(title: loginState.title, action: #selector(toggleLaunchAtLogin), keyEquivalent: "")
         login.target = self; login.state = loginState.checkmark
@@ -437,6 +454,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let quit = NSMenuItem(title: "退出 NotchQuota", action: #selector(quit), keyEquivalent: "q"); quit.target = self; menu.addItem(quit)
         return menu
     }
+    @objc func toggleSidebarCollapse() { sidebar?.toggleAutoCollapse() }
     func saveProviderPreferences() {
         guard !demo && !testMode else { return }
         UserDefaults.standard.set(excludedProviders.map(\.rawValue).sorted(), forKey: "excludedProviders")
