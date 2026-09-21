@@ -2,6 +2,13 @@ import XCTest
 @testable import NotchQuota
 
 final class SidebarTests: XCTestCase {
+    func testAppearanceRestoresAndUnknownPreferenceFallsBack() {
+        XCTAssertEqual(SidebarAppearance.restored(nil), .capsule)
+        XCTAssertEqual(SidebarAppearance.restored("unknown-future-style"), .capsule)
+        for style in SidebarAppearance.allCases {
+            XCTAssertEqual(SidebarAppearance.restored(style.rawValue), style)
+        }
+    }
     func testPinnedDisplayIgnoresPointerFocusAndScreenOrdering() {
         for initial: UInt32 in [1, 2, 3] {
             XCTAssertEqual(SidebarLayout.displayID(saved: 2, available: [1, 2, 3], initial: initial), 2)
@@ -52,12 +59,22 @@ final class SidebarTests: XCTestCase {
         for docked in [true, false] { for right in [true, false] {
             let handle = SidebarLayout.collapsedFrame(expanded: expanded, screen: screen, docked: docked, right: right)
             XCTAssertTrue(screen.contains(handle))
-            XCTAssertEqual(handle.width, docked ? 18 : 40)
+            XCTAssertEqual(handle.width, 40)
             let peek = SidebarLayout.collapsedFrame(expanded: expanded, screen: screen, docked: docked, right: right, peeking: true)
             XCTAssertTrue(screen.contains(peek))
-            XCTAssertEqual(peek.width, docked ? 28 : 40)
+            XCTAssertEqual(peek.width, 40)
             if docked { XCTAssertEqual(right ? peek.maxX : peek.minX, right ? handle.maxX : handle.minX) }
         } }
+    }
+    func testEnlargedFloatingStylesStayOnScreenNearEdges() {
+        let screen = CGRect(x: -1920, y: 100, width: 1920, height: 900)
+        for style in SidebarAppearance.allCases {
+            for x in [0.0, 1.0] {
+                let expanded = SidebarLayout.floatingFrame(count: 1, screen: screen, xFraction: x, yFraction: 1)
+                let frame = SidebarLayout.collapsedFrame(expanded: expanded, screen: screen, docked: false, right: true, scale: style.scale)
+                XCTAssertTrue(screen.contains(frame))
+            }
+        }
     }
     func testSavedSidebarModeIsRestoredOnOldAndNewSystems() {
         XCTAssertEqual(DisplayMode.restored("sidebar", majorVersion: 26), .sidebar)

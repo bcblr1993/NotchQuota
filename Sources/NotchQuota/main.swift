@@ -426,9 +426,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let settingsMenu = NSMenu(); settingsMenu.autoenablesItems = false; settingsMenu.minimumWidth = 240
         appendDisplayModeItems(to: settingsMenu)
         if displayMode == .sidebar {
-            let collapse = NSMenuItem(title: "闲置时收成小胶囊", action: #selector(toggleSidebarCollapse), keyEquivalent: "")
+            let collapse = NSMenuItem(title: "闲置时自动收起", action: #selector(toggleSidebarCollapse), keyEquivalent: "")
             collapse.target = self; collapse.state = sidebar?.autoCollapse == true ? .on : .off
-            settingsMenu.addItem(collapse); settingsMenu.addItem(.separator())
+            settingsMenu.addItem(collapse)
+            let appearanceMenu = NSMenu(); appearanceMenu.minimumWidth = 160
+            for style in SidebarAppearance.allCases {
+                let item = NSMenuItem(title: style.title, action: #selector(changeSidebarAppearance(_:)), keyEquivalent: "")
+                item.target = self; item.representedObject = style.rawValue
+                item.state = sidebar?.appearance == style ? .on : .off
+                appearanceMenu.addItem(item)
+            }
+            let appearanceItem = NSMenuItem(title: "收起外观", action: nil, keyEquivalent: "")
+            appearanceItem.submenu = appearanceMenu; settingsMenu.addItem(appearanceItem)
+            settingsMenu.addItem(.separator())
         }
         let loginState = demo || testMode ? LoginItemState.disabled : LaunchAtLogin.state
         let login = NSMenuItem(title: loginState.title, action: #selector(toggleLaunchAtLogin), keyEquivalent: "")
@@ -453,6 +463,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(.separator())
         let quit = NSMenuItem(title: "退出 NotchQuota", action: #selector(quit), keyEquivalent: "q"); quit.target = self; menu.addItem(quit)
         return menu
+    }
+    @objc func changeSidebarAppearance(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String, let style = SidebarAppearance(rawValue: raw) else { return }
+        sidebar?.setAppearance(style)
     }
     @objc func toggleSidebarCollapse() { sidebar?.toggleAutoCollapse() }
     func saveProviderPreferences() {

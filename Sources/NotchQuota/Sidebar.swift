@@ -23,10 +23,11 @@ enum SidebarLayout {
         result.origin.x = screen.minX + 10 + max(0, screen.width - width - 20) * CGFloat(min(1, max(0, xFraction)))
         return result
     }
-    static func collapsedFrame(expanded: NSRect, screen: NSRect, docked: Bool, right: Bool, peeking: Bool = false) -> NSRect {
-        let width: CGFloat = docked ? (peeking ? 28 : 18) : 40
-        return NSRect(x: docked ? (right ? screen.maxX - width : screen.minX) : expanded.midX - width / 2,
-                      y: min(screen.maxY - 60, max(screen.minY, expanded.midY - 30)), width: width, height: 60)
+    static func collapsedFrame(expanded: NSRect, screen: NSRect, docked: Bool, right: Bool, peeking: Bool = false, scale: CGFloat = 1, halfHidden: Bool = false) -> NSRect {
+        let width: CGFloat = (docked && halfHidden ? 22 : 40) * scale
+        let height: CGFloat = 40 * scale
+        return NSRect(x: docked ? (right ? screen.maxX - width : screen.minX) : min(screen.maxX - width, max(screen.minX, expanded.midX - width / 2)),
+                      y: min(screen.maxY - height, max(screen.minY, expanded.midY - height / 2)), width: width, height: height)
     }
     static func detailFrame(bar: NSRect, rowY: CGFloat, size: NSSize, screen: NSRect, right: Bool) -> NSRect {
         let width = min(size.width, screen.width - 24), height = min(size.height, screen.height - 24)
@@ -213,8 +214,8 @@ final class SidebarSurface: NSView {
     private(set) var idleWork: DispatchWorkItem?
     private(set) var expandWork: DispatchWorkItem?
     private var pointerInBar = false, pointerInDetail = false, dragging = false
-    private let face = CALayer()
-    private let leftEye = CALayer(), rightEye = CALayer()
+    private let emblem = SidebarEmblem()
+    private(set) var appearance: SidebarAppearance = .capsule
     private var screenID: UInt32?
     private var motion: TimeInterval = 0.2
     private var generation = 0
@@ -254,6 +255,7 @@ final class SidebarSurface: NSView {
             docked = d.object(forKey: "sidebarDocked") as? Bool ?? true
             xFraction = d.object(forKey: "sidebarX") as? Double ?? 0.5
             autoCollapse = d.object(forKey: "sidebarAutoCollapse") as? Bool ?? true
+            appearance = .restored(d.string(forKey: SidebarAppearance.preferenceKey))
         }
         panel.contentView = surface; surface.layer?.backgroundColor = NSColor(white: 0.035, alpha: 0.97).cgColor
         surface.applyFinish()
@@ -262,11 +264,11 @@ final class SidebarSurface: NSView {
         scroll.documentView = document; surface.addSubview(scroll)
         surface.laidOut = { [weak self] in
             guard let self else { return }
-            self.layoutCat()
+            self.layoutEmblem()
         }
         scroll.autoresizingMask = [.width, .height]
-        face.opacity = 0; surface.layer?.addSublayer(face)
-        configureCat()
+        emblem.opacity = 0; surface.layer?.addSublayer(emblem)
+        configureEmblem()
         surface.entered = { [weak self] in if self?.acceptsInput == true { self?.enterBar() } }
         surface.exited = { [weak self] in if self?.acceptsInput == true { self?.exitBar() } }
         detail.contentView = detailSurface
@@ -283,113 +285,38 @@ final class SidebarSurface: NSView {
         detailSurface.entered = { [weak self] in if self?.acceptsInput == true { self?.pointerInDetail = true; self?.cancelIdle(); self?.cancelClose() } }
         detailSurface.exited = { [weak self] in if self?.acceptsInput == true { self?.pointerInDetail = false; self?.scheduleClose(); self?.scheduleIdleCollapse() } }
     }
-    private func configureCat() {
-        face.bounds = CGRect(x: 0, y: 0, width: 32, height: 56)
-        let fur = NSColor(white: 0.025, alpha: 1).cgColor
-        let outline = NSColor(white: 0.16, alpha: 1).cgColor
-        let ear = NSColor(red: 0.36, green: 0.32, blue: 0.33, alpha: 1).cgColor
-        let gold = NSColor(red: 1, green: 0.88, blue: 0.28, alpha: 1).cgColor
-        var headOffset: CGFloat = 0
-        func pixels(_ points: [(CGFloat, CGFloat)], color: CGColor, stroke: Bool = false) {
-            let path = CGMutablePath()
-            for (i, p) in points.enumerated() {
-                if i == 0 { path.move(to: CGPoint(x: p.0, y: p.1 + headOffset)) }
-                else { path.addLine(to: CGPoint(x: p.0, y: p.1 + headOffset)) }
-            }
-            path.closeSubpath()
-            let layer = CAShapeLayer(); layer.frame = face.bounds; layer.path = path
-            layer.fillColor = color; layer.strokeColor = stroke ? outline : nil
-            layer.lineWidth = 0.5; layer.lineJoin = .miter
-            face.addSublayer(layer)
-        }
-        // Hand-authored pixel silhouettes: curled tail, hanging body, angular ears and gripping paws.
-        pixels([(22,17),(27,17),(27,8),(25,8),(25,5),(22,5),(22,3),(18,3),(18,1),
-                (10,1),(10,2),(6,2),(6,4),(3,4),(3,8),(5,8),(5,10),(8,10),
-                (8,8),(10,8),(10,5),(17,5),(17,6),(21,6),(21,9),(22,9)], color: fur, stroke: true)
-        pixels([(16,41),(29,41),(29,12),(27,12),(27,8),(24,8),(24,10),(21,10),
-                (21,15),(19,15),(19,22),(18,22),(18,30),(16,30)], color: fur, stroke: true)
-        headOffset = 16
-        pixels([(3,24),(2,24),(2,29),(1,29),(1,37),(3,37),(3,36),(5,36),
-                (5,35),(7,35),(7,34),(10,34),(10,33),(16,33),(16,34),(20,34),
-                (20,36),(22,36),(22,39),(24,39),(24,37),(26,37),(26,34),
-                (28,34),(28,31),(30,31),(30,24),(28,24),(28,21),(25,21),
-                (25,19),(19,19),(19,18),(12,18),(12,19),(8,19),(8,21),(5,21),(5,23),(3,23)], color: fur, stroke: true)
-        pixels([(3,34),(5,34),(5,33),(7,33),(7,32),(5,32),(5,30),(3,30)], color: ear)
-        pixels([(23,36),(24,36),(24,34),(26,34),(26,32),(23,32),(23,33),(22,33),(22,35),(23,35)], color: ear)
-        for (eye, x, y) in [(leftEye, 8.0, 24.0), (rightEye, 21.0, 27.0)] {
-            eye.frame = CGRect(x: x, y: y + headOffset, width: 5, height: 6)
-            let path = CGMutablePath()
-            path.addRect(CGRect(x: 1, y: 0, width: 3, height: 6)); path.addRect(CGRect(x: 0, y: 1, width: 5, height: 4))
-            let iris = CAShapeLayer(); iris.frame = eye.bounds; iris.path = path; iris.fillColor = gold
-            eye.addSublayer(iris)
-            let pupil = CALayer(); pupil.frame = CGRect(x: 2, y: 1, width: 2, height: 4); pupil.backgroundColor = fur
-            eye.addSublayer(pupil)
-            let glint = CALayer(); glint.frame = CGRect(x: 1, y: 4, width: 1, height: 1); glint.backgroundColor = NSColor.white.cgColor
-            eye.addSublayer(glint); face.addSublayer(eye)
-        }
-        pixels([(16,24),(17,24),(17,23),(16,23)], color: ear)
-        pixels([(0,23),(5,23),(5,22),(0,22)], color: outline)
-        pixels([(2,20),(5,21),(6,21),(3,19),(2,19)], color: outline)
-        pixels([(24,19),(24,21),(27,21),(27,22),(30,22),(30,21),(32,21),(32,18),
-                (30,18),(30,17),(28,17),(28,15),(26,15),(26,17),(25,17),(25,19)], color: fur, stroke: true)
-        pixels([(26,20),(29,20),(29,19),(31,19),(31,18),(29,18),(29,19),(26,19)], color: outline)
+    private func configureEmblem() {
+        CATransaction.begin(); CATransaction.setDisableActions(true)
+        emblem.configure(appearance)
+        CATransaction.commit()
     }
-    private func layoutCat() {
-        face.sublayerTransform = CATransform3DMakeScale(docked && !right ? -1 : 1, 1, 1)
-        let inset: CGFloat = pointerInBar ? 8 : 2
-        let x = collapsed && docked ? (right ? surface.bounds.width - inset : inset) : surface.bounds.midX
-        face.position = CGPoint(x: x, y: surface.bounds.midY + (collapsed && !docked && pointerInBar ? 2 : 0))
+    func setAppearance(_ value: SidebarAppearance) {
+        guard appearance != value else { return }
+        cancelExpand()
+        appearance = value
+        configureEmblem(); updateEmblemStatus(); position(); updateEmblemIdle()
+        if persist { UserDefaults.standard.set(value.rawValue, forKey: SidebarAppearance.preferenceKey) }
     }
-    private func stopCatAnimations() {
-        face.removeAllAnimations(); leftEye.removeAllAnimations(); rightEye.removeAllAnimations()
+    private func updateEmblemStatus() {
+        let account = accounts.first { $0.id == model.accounts.first?.id } ?? accounts.first
+        let state = account?.state
+        let remaining = state?.stale == true || state?.error != nil ? nil : state?.snapshot?.remaining
+        emblem.update(remaining: remaining, scale: panel.backingScaleFactor)
+        surface.setAccessibilityLabel((account?.title ?? "额度") + " · " + (remaining.map { "剩余\(Int($0.rounded()))%" } ?? "额度暂不可用") + " · 移入展开")
     }
-    var hasCatAnimations: Bool {
-        [face, leftEye, rightEye].contains { $0.animationKeys()?.isEmpty == false }
+    private func layoutEmblem() {
+        let tucked = collapsed && docked && appearance == .ghost
+        emblem.face(right: !docked || right, docked: tucked, peeking: false)
+        let x = tucked ? (right ? surface.bounds.width - 2 * appearance.scale : 2 * appearance.scale) : surface.bounds.midX
+        emblem.position = CGPoint(x: x, y: surface.bounds.midY)
     }
-    private func updateCatIdle() {
-        guard collapsed, panel.isVisible, motion > 0, !pointerInBar else {
-            face.removeAnimation(forKey: "idleTilt")
-            for eye in [leftEye, rightEye] { eye.removeAnimation(forKey: "idleBlink") }
-            return
-        }
-        if face.animation(forKey: "idleTilt") == nil {
-            let tilt = CAKeyframeAnimation(keyPath: "transform.rotation.z")
-            tilt.values = [0, 0, -0.045, 0.025, 0, 0]
-            tilt.keyTimes = [0, 0.73, 0.79, 0.86, 0.93, 1]
-            tilt.duration = 12; tilt.repeatCount = .infinity
-            tilt.calculationMode = .cubic; tilt.beginTime = CACurrentMediaTime() + 1
-            face.add(tilt, forKey: "idleTilt")
-        }
-        for eye in [leftEye, rightEye] where eye.animation(forKey: "idleBlink") == nil {
-            let blink = CAKeyframeAnimation(keyPath: "transform.scale.y")
-            blink.values = [1, 1, 0.12, 1, 1]; blink.keyTimes = [0, 0.90, 0.925, 0.95, 1]
-            blink.duration = 6.8; blink.repeatCount = .infinity; blink.beginTime = CACurrentMediaTime() + 0.8
-            eye.add(blink, forKey: "idleBlink")
-        }
-    }
+    private func stopEmblemAnimations() { emblem.stopMotion() }
+    var hasEmblemAnimations: Bool { emblem.hasMotion }
+    private func updateEmblemIdle() { emblem.idle(false) }
     private func cancelExpand() { expandWork?.cancel(); expandWork = nil }
-    private func animateCatAttention() {
-        let previous = face.presentation()?.position ?? face.position
-        let previousFrame = panel.frame
-        if docked { position() }
-        let targetFrame = panel.frame
-        CATransaction.begin(); CATransaction.setDisableActions(true); layoutCat(); CATransaction.commit()
-        face.removeAnimation(forKey: "attention")
-        guard motion > 0 else { return }
-        if previousFrame != targetFrame {
-            panel.setFrame(previousFrame, display: false)
-            NSAnimationContext.runAnimationGroup { context in
-                context.duration = 0.22; context.timingFunction = CAMediaTimingFunction(name: .easeOut)
-                panel.animator().setFrame(targetFrame, display: true)
-            }
-        }
-        let peek = CASpringAnimation(keyPath: "position")
-        peek.fromValue = NSValue(point: previous); peek.toValue = NSValue(point: face.position)
-        peek.stiffness = 300; peek.damping = 27; peek.duration = 0.28
-        face.add(peek, forKey: "attention")
-    }
     func update(_ values: [OverviewAccount], duration: TimeInterval) {
         motion = duration; accounts = values
+        updateEmblemStatus()
         if cells.map(\.id) != values.map(\.id) {
             dismiss(animated: false)
             for cell in cells { cell.removeFromSuperview() }
@@ -405,22 +332,22 @@ final class SidebarSurface: NSView {
             position()
         }
         for (cell, value) in zip(cells, values) { cell.update(value, duration: panel.isVisible ? duration : 0) }
-        if duration == 0 { for cell in cells { cell.stopAnimations() }; detailSurface.layer?.removeAllAnimations(); surface.layer?.removeAllAnimations(); surface.stopChromeAnimation(); stopCatAnimations() }
+        if duration == 0 { for cell in cells { cell.stopAnimations() }; detailSurface.layer?.removeAllAnimations(); surface.layer?.removeAllAnimations(); surface.stopChromeAnimation(); stopEmblemAnimations() }
         if !panel.isVisible && !values.isEmpty { position(); panel.orderFrontRegardless(); scheduleIdleCollapse() }
         if !selecting, detail.isVisible, let selectedID, values.contains(where: { $0.id == selectedID }) { positionDetail(animated: false) }
-        updateCatIdle()
+        updateEmblemIdle()
     }
     func position() {
         let screen = visibleScreen
         let expanded = expandedFrame(on: screen)
-        let frame = collapsed ? SidebarLayout.collapsedFrame(expanded: expanded, screen: screen.visibleFrame, docked: docked, right: right, peeking: pointerInBar) : expanded
+        let frame = collapsed ? SidebarLayout.collapsedFrame(expanded: expanded, screen: screen.visibleFrame, docked: docked, right: right, peeking: pointerInBar, scale: appearance.scale, halfHidden: appearance == .ghost) : expanded
         panel.setFrame(frame, display: true)
         scroll.isHidden = collapsed
         surface.setChromeVisible(!collapsed)
         surface.layer?.cornerRadius = collapsed ? 0 : 26
         CATransaction.begin(); CATransaction.setDisableActions(true)
-        face.opacity = collapsed ? 1 : 0
-        layoutCat()
+        emblem.opacity = collapsed ? 1 : 0
+        layoutEmblem()
         CATransaction.commit()
         scroll.frame = NSRect(x: 0, y: 10, width: frame.width, height: max(0, frame.height - 20))
         document.frame = NSRect(x: 0, y: 0, width: 52, height: CGFloat(cells.count) * 54)
@@ -439,18 +366,12 @@ final class SidebarSurface: NSView {
         idleWork = work; DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
     }
     func enterBar() {
-        pointerInBar = true; cancelIdle(); cancelExpand(); updateCatIdle()
-        guard collapsed, !dragging else { return }
-        animateCatAttention()
-        let work = DispatchWorkItem { [weak self] in
-            guard let self else { return }; self.expandWork = nil
-            if self.pointerInBar && !self.dragging { self.setCollapsed(false) }
-        }
-        expandWork = work; DispatchQueue.main.asyncAfter(deadline: .now() + 0.45, execute: work)
+        pointerInBar = true; cancelIdle(); cancelExpand()
+        guard !dragging else { return }
+        setCollapsed(false)
     }
     func exitBar() {
-        pointerInBar = false; cancelExpand()
-        if collapsed { animateCatAttention(); updateCatIdle() }
+        pointerInBar = false
         scheduleIdleCollapse()
     }
     func setCollapsed(_ value: Bool) {
@@ -458,10 +379,10 @@ final class SidebarSurface: NSView {
         cancelIdle(); cancelExpand()
         if value { dismiss(animated: false) }
         let old = panel.frame
-        let previousCatOpacity = face.presentation()?.opacity ?? face.opacity
+        let previousEmblemOpacity = emblem.presentation()?.opacity ?? emblem.opacity
         collapsed = value; position()
         let new = panel.frame
-        updateCatIdle()
+        updateEmblemIdle()
         guard motion > 0, panel.isVisible else { return }
         // Animate window geometry once; no display-link or idle animation loop.
         panel.setFrame(old, display: false)
@@ -487,21 +408,11 @@ final class SidebarSurface: NSView {
                 cell.layer?.add(reveal, forKey: "unfold")
             }
         }
-        let catFade = CABasicAnimation(keyPath: "opacity")
-        catFade.fromValue = previousCatOpacity; catFade.toValue = value ? 1 : 0; catFade.duration = value ? 0.24 : 0.12
-        face.add(catFade, forKey: "appearance")
-        if value {
-            let peek = CASpringAnimation(keyPath: docked ? "transform.translation.x" : "transform.translation.y")
-            peek.fromValue = docked ? (right ? 8 : -8) : -5; peek.toValue = 0
-            peek.stiffness = 260; peek.damping = 22; peek.duration = 0.38
-            face.add(peek, forKey: "peek")
-            for eye in [leftEye, rightEye] {
-                let blink = CAKeyframeAnimation(keyPath: "transform.scale.y")
-                blink.values = [1, 1, 0.12, 1]; blink.keyTimes = [0, 0.35, 0.65, 1]; blink.duration = 0.38
-                eye.add(blink, forKey: "blink")
-            }
-        }
+        let emblemFade = CABasicAnimation(keyPath: "opacity")
+        emblemFade.fromValue = previousEmblemOpacity; emblemFade.toValue = value ? 1 : 0; emblemFade.duration = value ? 0.24 : 0.12
+        emblem.add(emblemFade, forKey: "appearance")
     }
+
     func toggleAutoCollapse() {
         autoCollapse.toggle(); cancelIdle()
         if autoCollapse { scheduleIdleCollapse() } else { setCollapsed(false) }
@@ -610,7 +521,7 @@ final class SidebarSurface: NSView {
     }
     func hide() {
         cancelExpand(); cancelIdle(); dismiss(animated: false); cells.forEach { $0.stopAnimations() }
-        surface.layer?.removeAllAnimations(); surface.stopChromeAnimation(); stopCatAnimations()
+        surface.layer?.removeAllAnimations(); surface.stopChromeAnimation(); stopEmblemAnimations()
         pointerInBar = false; pointerInDetail = false; panel.orderOut(nil)
     }
     private func drag(_ event: NSEvent) {
@@ -627,7 +538,7 @@ final class SidebarSurface: NSView {
     }
     func place(at point: NSPoint, screen: NSScreen) {
         cancelExpand(); cancelIdle(); collapsed = false
-        updateCatIdle()
+        updateEmblemIdle()
         screenID = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? UInt32
         right = point.x >= screen.visibleFrame.midX
         docked = min(abs(point.x - screen.visibleFrame.minX), abs(point.x - screen.visibleFrame.maxX)) <= 52
