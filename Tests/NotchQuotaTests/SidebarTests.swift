@@ -2,6 +2,21 @@ import XCTest
 @testable import NotchQuota
 
 final class SidebarTests: XCTestCase {
+    func testPinnedDisplayIgnoresPointerFocusAndScreenOrdering() {
+        for initial: UInt32 in [1, 2, 3] {
+            XCTAssertEqual(SidebarLayout.displayID(saved: 2, available: [1, 2, 3], initial: initial), 2)
+            XCTAssertEqual(SidebarLayout.displayID(saved: 2, available: [3, 2, 1], initial: initial), 2)
+        }
+    }
+    func testFirstPlacementAndDisconnectedDisplayHaveStableFallback() {
+        let first = SidebarLayout.displayID(saved: nil, available: [1, 2], initial: 2)
+        XCTAssertEqual(first, 2)
+        XCTAssertEqual(SidebarLayout.displayID(saved: first, available: [1, 2], initial: 1), 2)
+        let fallback = SidebarLayout.displayID(saved: 2, available: [1, 3], initial: 3)
+        XCTAssertEqual(fallback, 1)
+        XCTAssertEqual(SidebarLayout.displayID(saved: fallback, available: [1, 2, 3], initial: 2), 1)
+        XCTAssertNil(SidebarLayout.displayID(saved: 2, available: [], initial: 1))
+    }
     func testBothEdgesAndClampedPositionOnExternalDisplay() {
         let screen = CGRect(x: -1920, y: 200, width: 1920, height: 1000)
         for right in [false, true] {

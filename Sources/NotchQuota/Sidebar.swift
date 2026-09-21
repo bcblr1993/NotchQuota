@@ -4,6 +4,12 @@ import QuartzCore
 
 /// Geometry is independent of mouse tracking and quota fetching.
 enum SidebarLayout {
+    // Once bound, focus/pointer changes must never choose a different display.
+    static func displayID(saved: UInt32?, available: [UInt32], initial: UInt32?) -> UInt32? {
+        if let saved, available.contains(saved) { return saved }
+        if saved == nil, let initial, available.contains(initial) { return initial }
+        return available.first
+    }
     static let width: CGFloat = 52
     static let rowHeight: CGFloat = 54
     static let inset: CGFloat = 0
@@ -199,7 +205,19 @@ final class SidebarSurface: NSView {
     private var generation = 0
     private var selecting = false
     private var accounts: [OverviewAccount] = []
-    private var visibleScreen: NSScreen { NSScreen.screens.first { ($0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? UInt32) == screenID } ?? NSScreen.main ?? NSScreen.screens[0] }
+    private var visibleScreen: NSScreen {
+        let screens = NSScreen.screens
+        let ids = screens.compactMap { $0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? UInt32 }
+        // Pointer determines placement only on the first launch without a saved screen.
+        let initial = screenID == nil ? screens.first { $0.frame.contains(NSEvent.mouseLocation) }
+            .flatMap { $0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? UInt32 } : nil
+        let resolved = SidebarLayout.displayID(saved: screenID, available: ids, initial: initial)
+        if resolved != screenID {
+            screenID = resolved
+            if persist { UserDefaults.standard.set(resolved, forKey: "sidebarScreen") }
+        }
+        return screens.first { ($0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? UInt32) == resolved } ?? screens[0]
+    }
     var onSelect: ((String) -> Void)?, onMenu: ((NSEvent?, NSView) -> Void)?
     var acceptsInput = true
     let persist: Bool

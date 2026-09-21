@@ -54,7 +54,10 @@ extension AppDelegate {
                   "rapid varying-height switches settle without clipping")
             check(bar.cells.allSatisfy { $0.toolTip == nil }, "account tooltips cannot cover quota details")
             bar.dismiss(animated: true); await wait(0.05); bar.select(first, pin: false); await wait(0.4)
-            check(bar.detail.isVisible && bar.detail.alphaValue == 1 && bar.detailSurface.layer?.animationKeys()?.isEmpty != false,
+            // Wait for the render server to retire our transition; unrelated AppKit layer
+            // animations are not evidence of a stale close operation.
+            for _ in 0..<30 where bar.detailSurface.layer?.animation(forKey: "visibility") != nil { await wait(0.02) }
+            check(bar.detail.isVisible && bar.detail.alphaValue == 1 && bar.closeWork == nil && bar.detailSurface.layer?.animation(forKey: "visibility") == nil,
                   "reopening during fade does not inherit old hide animation")
             states[.antigravity] = savedAntigravity
 
@@ -78,6 +81,17 @@ extension AppDelegate {
             smokeInstalled = []; discoverInstalled(); updateSidebar()
             check(!bar.panel.isVisible && !bar.detail.isVisible, "removing all accounts closes both windows")
             smokeInstalled = Provider.allCases; discoverInstalled(); updateSidebar()
+            for screen in NSScreen.screens {
+                bar.place(at: NSPoint(x: screen.visibleFrame.midX, y: screen.visibleFrame.midY), screen: screen)
+                bar.exitBar(); bar.setCollapsed(true); await wait(0.4)
+                check(screen.visibleFrame.contains(bar.panel.frame), "collapsed sidebar stays on explicitly selected physical display")
+                bar.setCollapsed(false); await wait(0.4)
+                bar.screenChanged(); updateSidebar()
+                check(screen.visibleFrame.contains(bar.panel.frame), "expand and display refresh retain physical display binding")
+                bar.select(first, pin: false); await wait(0.4)
+                check(screen.visibleFrame.contains(bar.detail.frame), "account details remain on sidebar display")
+                bar.dismiss(animated: false)
+            }
             if let screen = NSScreen.main {
                 bar.place(at: NSPoint(x: screen.visibleFrame.midX, y: screen.visibleFrame.midY), screen: screen)
                 check(!bar.docked && abs(bar.panel.frame.midX - screen.visibleFrame.midX) < 1, "drag placement supports free floating position")
