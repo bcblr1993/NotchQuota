@@ -31,6 +31,6 @@ python3 scripts/test-sidebar.py --trace --output build/sidebar-frame-check
 
 ## 帧分析限制
 
-两次 Animation Hitches 采集均在目标进程正常结束后停留于保存阶段。第二次延长等待后，xctrace 线程采样仍显示 DTXConnectionServices 信号量等待；轨迹无法完整导出。已停止本次测试自己的分析器进程。28 项交互断言通过，但逐帧结果为未完成，不能以空记录宣称零卡顿。脚本改为在目标退出前结束 60 秒采集，供后续在 Instruments 环境恢复后重测，此替代方式尚未验证。
+两次 Animation Hitches 采集均在目标进程正常结束后停留于保存阶段。第二次延长等待后，xctrace 线程采样仍显示 DTXConnectionServices 信号量等待；轨迹无法完整导出。已停止本次测试自己的分析器进程。28 项交互断言通过，但逐帧结果为未完成，不能以空记录宣称零卡顿。进一步改为目标退出前结束 60 秒采集，第三次仍在保存阶段等待超过一分钟，未得到完整轨迹。测试自己的分析器进程均已停止；逐帧呈现仍需在 Instruments 环境恢复后补测。
 
 本机 Computer Use 验证了贴边把手展开及七个真实账号的显示；自由拖动/跨屏的鼠标验收未完成，几何与快速反向收放已由原生测试覆盖。
