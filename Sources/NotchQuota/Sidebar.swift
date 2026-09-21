@@ -26,7 +26,7 @@ enum SidebarLayout {
     static func collapsedFrame(expanded: NSRect, screen: NSRect, docked: Bool, right: Bool, peeking: Bool = false) -> NSRect {
         let width: CGFloat = docked ? (peeking ? 28 : 18) : 40
         return NSRect(x: docked ? (right ? screen.maxX - width : screen.minX) : expanded.midX - width / 2,
-                      y: min(screen.maxY - 44, max(screen.minY, expanded.midY - 22)), width: width, height: 44)
+                      y: min(screen.maxY - 60, max(screen.minY, expanded.midY - 30)), width: width, height: 60)
     }
     static func detailFrame(bar: NSRect, rowY: CGFloat, size: NSSize, screen: NSRect, right: Bool) -> NSRect {
         let width = min(size.width, screen.width - 24), height = min(size.height, screen.height - 24)
@@ -284,49 +284,58 @@ final class SidebarSurface: NSView {
         detailSurface.exited = { [weak self] in if self?.acceptsInput == true { self?.pointerInDetail = false; self?.scheduleClose(); self?.scheduleIdleCollapse() } }
     }
     private func configureCat() {
-        face.bounds = CGRect(x: 0, y: 0, width: 32, height: 40)
-        let fur = NSColor(red: 0.94, green: 0.89, blue: 0.83, alpha: 1).cgColor
-        let shade = NSColor(red: 0.82, green: 0.75, blue: 0.68, alpha: 1).cgColor
-        let rose = NSColor(red: 0.84, green: 0.55, blue: 0.60, alpha: 1).cgColor
-        let ink = NSColor(red: 0.23, green: 0.22, blue: 0.27, alpha: 1).cgColor
-        func shape(_ path: CGPath, fill: CGColor?, stroke: CGColor? = nil, width: CGFloat = 0.85) {
+        face.bounds = CGRect(x: 0, y: 0, width: 32, height: 56)
+        let fur = NSColor(white: 0.025, alpha: 1).cgColor
+        let outline = NSColor(white: 0.16, alpha: 1).cgColor
+        let ear = NSColor(red: 0.36, green: 0.32, blue: 0.33, alpha: 1).cgColor
+        let gold = NSColor(red: 1, green: 0.88, blue: 0.28, alpha: 1).cgColor
+        var headOffset: CGFloat = 0
+        func pixels(_ points: [(CGFloat, CGFloat)], color: CGColor, stroke: Bool = false) {
+            let path = CGMutablePath()
+            for (i, p) in points.enumerated() {
+                if i == 0 { path.move(to: CGPoint(x: p.0, y: p.1 + headOffset)) }
+                else { path.addLine(to: CGPoint(x: p.0, y: p.1 + headOffset)) }
+            }
+            path.closeSubpath()
             let layer = CAShapeLayer(); layer.frame = face.bounds; layer.path = path
-            layer.fillColor = fill; layer.strokeColor = stroke; layer.lineWidth = width; layer.lineCap = .round; layer.lineJoin = .round
+            layer.fillColor = color; layer.strokeColor = stroke ? outline : nil
+            layer.lineWidth = 0.5; layer.lineJoin = .miter
             face.addSublayer(layer)
         }
-        let tail = CGMutablePath(); tail.move(to: CGPoint(x: 22, y: 5))
-        tail.addCurve(to: CGPoint(x: 29, y: 16), control1: CGPoint(x: 32, y: 1), control2: CGPoint(x: 32, y: 11))
-        shape(tail, fill: nil, stroke: shade, width: 3.5)
-        shape(CGPath(ellipseIn: CGRect(x: 7, y: 2, width: 19, height: 24), transform: nil), fill: shade)
-        shape(CGPath(ellipseIn: CGRect(x: 10, y: 3, width: 13, height: 19), transform: nil), fill: fur)
-        let head = CGMutablePath()
-        head.move(to: CGPoint(x: 3, y: 25)); head.addLine(to: CGPoint(x: 3.5, y: 38))
-        head.addQuadCurve(to: CGPoint(x: 12, y: 33), control: CGPoint(x: 9, y: 37))
-        head.addQuadCurve(to: CGPoint(x: 20, y: 33), control: CGPoint(x: 16, y: 34))
-        head.addQuadCurve(to: CGPoint(x: 28.5, y: 38), control: CGPoint(x: 25, y: 37))
-        head.addLine(to: CGPoint(x: 29, y: 25))
-        head.addCurve(to: CGPoint(x: 16, y: 14), control1: CGPoint(x: 32, y: 16), control2: CGPoint(x: 24, y: 14))
-        head.addCurve(to: CGPoint(x: 3, y: 25), control1: CGPoint(x: 8, y: 14), control2: CGPoint(x: 0, y: 16)); head.closeSubpath()
-        shape(head, fill: fur)
-        for x: CGFloat in [0, 19] {
-            let ear = CGMutablePath(); ear.move(to: CGPoint(x: x + 6, y: 34))
-            ear.addLine(to: CGPoint(x: x + 6, y: 28)); ear.addLine(to: CGPoint(x: x + 10, y: 31)); ear.closeSubpath()
-            shape(ear, fill: rose)
+        // Hand-authored pixel silhouettes: curled tail, hanging body, angular ears and gripping paws.
+        pixels([(22,17),(27,17),(27,8),(25,8),(25,5),(22,5),(22,3),(18,3),(18,1),
+                (10,1),(10,2),(6,2),(6,4),(3,4),(3,8),(5,8),(5,10),(8,10),
+                (8,8),(10,8),(10,5),(17,5),(17,6),(21,6),(21,9),(22,9)], color: fur, stroke: true)
+        pixels([(16,41),(29,41),(29,12),(27,12),(27,8),(24,8),(24,10),(21,10),
+                (21,15),(19,15),(19,22),(18,22),(18,30),(16,30)], color: fur, stroke: true)
+        headOffset = 16
+        pixels([(3,24),(2,24),(2,29),(1,29),(1,37),(3,37),(3,36),(5,36),
+                (5,35),(7,35),(7,34),(10,34),(10,33),(16,33),(16,34),(20,34),
+                (20,36),(22,36),(22,39),(24,39),(24,37),(26,37),(26,34),
+                (28,34),(28,31),(30,31),(30,24),(28,24),(28,21),(25,21),
+                (25,19),(19,19),(19,18),(12,18),(12,19),(8,19),(8,21),(5,21),(5,23),(3,23)], color: fur, stroke: true)
+        pixels([(3,34),(5,34),(5,33),(7,33),(7,32),(5,32),(5,30),(3,30)], color: ear)
+        pixels([(23,36),(24,36),(24,34),(26,34),(26,32),(23,32),(23,33),(22,33),(22,35),(23,35)], color: ear)
+        for (eye, x, y) in [(leftEye, 8.0, 24.0), (rightEye, 21.0, 27.0)] {
+            eye.frame = CGRect(x: x, y: y + headOffset, width: 5, height: 6)
+            let path = CGMutablePath()
+            path.addRect(CGRect(x: 1, y: 0, width: 3, height: 6)); path.addRect(CGRect(x: 0, y: 1, width: 5, height: 4))
+            let iris = CAShapeLayer(); iris.frame = eye.bounds; iris.path = path; iris.fillColor = gold
+            eye.addSublayer(iris)
+            let pupil = CALayer(); pupil.frame = CGRect(x: 2, y: 1, width: 2, height: 4); pupil.backgroundColor = fur
+            eye.addSublayer(pupil)
+            let glint = CALayer(); glint.frame = CGRect(x: 1, y: 4, width: 1, height: 1); glint.backgroundColor = NSColor.white.cgColor
+            eye.addSublayer(glint); face.addSublayer(eye)
         }
-        for (eye, x) in [(leftEye, 9.0), (rightEye, 21.0)] {
-            eye.frame = CGRect(x: x, y: 23, width: 2.6, height: 4.5)
-            eye.cornerRadius = 1.3; eye.backgroundColor = ink; face.addSublayer(eye)
-        }
-        let nose = CGMutablePath(); nose.move(to: CGPoint(x: 14, y: 21)); nose.addLine(to: CGPoint(x: 18, y: 21))
-        nose.addQuadCurve(to: CGPoint(x: 16, y: 18.5), control: CGPoint(x: 17, y: 18)); nose.closeSubpath(); shape(nose, fill: rose)
-        let mouth = CGMutablePath(); mouth.move(to: CGPoint(x: 12, y: 18))
-        mouth.addQuadCurve(to: CGPoint(x: 16, y: 18.5), control: CGPoint(x: 14, y: 15.5))
-        mouth.addQuadCurve(to: CGPoint(x: 20, y: 18), control: CGPoint(x: 18, y: 15.5)); shape(mouth, fill: nil, stroke: ink)
-        for x: CGFloat in [9, 18] {
-            shape(CGPath(ellipseIn: CGRect(x: x, y: 1, width: 6, height: 5), transform: nil), fill: fur)
-        }
+        pixels([(16,24),(17,24),(17,23),(16,23)], color: ear)
+        pixels([(0,23),(5,23),(5,22),(0,22)], color: outline)
+        pixels([(2,20),(5,21),(6,21),(3,19),(2,19)], color: outline)
+        pixels([(24,19),(24,21),(27,21),(27,22),(30,22),(30,21),(32,21),(32,18),
+                (30,18),(30,17),(28,17),(28,15),(26,15),(26,17),(25,17),(25,19)], color: fur, stroke: true)
+        pixels([(26,20),(29,20),(29,19),(31,19),(31,18),(29,18),(29,19),(26,19)], color: outline)
     }
     private func layoutCat() {
+        face.sublayerTransform = CATransform3DMakeScale(docked && !right ? -1 : 1, 1, 1)
         let inset: CGFloat = pointerInBar ? 8 : 2
         let x = collapsed && docked ? (right ? surface.bounds.width - inset : inset) : surface.bounds.midX
         face.position = CGPoint(x: x, y: surface.bounds.midY + (collapsed && !docked && pointerInBar ? 2 : 0))
