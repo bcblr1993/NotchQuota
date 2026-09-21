@@ -96,7 +96,7 @@ final class SidebarCell: NSView {
         }
         CATransaction.commit()
         let label = account.title + (account.subtitle.isEmpty ? "" : " · " + account.subtitle)
-        toolTip = label; setAccessibilityLabel(label + " · " + (remaining.map { "\(Int($0))%" } ?? "未知额度"))
+        toolTip = nil; setAccessibilityLabel(label + " · " + (remaining.map { "\(Int($0))%" } ?? "未知额度"))
     }
     func highlight(_ enabled: Bool) {
         guard highlighted != enabled else { return }; highlighted = enabled
@@ -177,7 +177,7 @@ final class SidebarSurface: NSView {
     let surface = SidebarSurface(frame: .zero), detailSurface = SidebarSurface(frame: .zero)
     let scroll = NSScrollView(), document = NSView()
     let model: OverviewModel
-    private var detailHost: NSView?
+    private(set) var detailHost: NSView?
     private let pointer = CAShapeLayer()
     private(set) var cells: [SidebarCell] = []
     private(set) var selectedID: String?
@@ -244,8 +244,10 @@ final class SidebarSurface: NSView {
         detailSurface.layer?.masksToBounds = false
         let host = NSHostingView(rootView: QuotaOverview(model: model).preferredColorScheme(.dark))
         detailHost = host; host.wantsLayer = true
+        host.sizingOptions = []
         host.layer?.cornerRadius = 16; host.layer?.masksToBounds = true
-        host.frame = detailSurface.bounds; host.autoresizingMask = [.height]; detailSurface.addSubview(host)
+        host.frame = detailSurface.bounds; host.autoresizingMask = []; detailSurface.addSubview(host)
+        detailSurface.laidOut = { [weak self] in self?.layoutDetailContent() }
         pointer.fillColor = NSColor(white: 0.045, alpha: 1).cgColor; detailSurface.layer?.addSublayer(pointer)
         surface.drag = { [weak self] event in if self?.acceptsInput == true { self?.drag(event) } }
         surface.context = { [weak self] event, view in if self?.acceptsInput == true { self?.showMenu(event, view) } }
@@ -373,17 +375,11 @@ final class SidebarSurface: NSView {
         detail.alphaValue = 1
         if !wasVisible { detail.orderFrontRegardless() }
         if motion > 0 && (!wasVisible || changed) {
-            let fade = CATransition(); fade.type = .fade; fade.duration = motion
-            detailSurface.layer?.add(fade, forKey: "account")
-            if !wasVisible {
-                let spring = CASpringAnimation(keyPath: "transform.scale"); spring.fromValue = 0.965; spring.toValue = 1
-                spring.stiffness = 360; spring.damping = 30; spring.duration = 0.28
-                detailSurface.layer?.add(spring, forKey: "reveal")
-                let slide = CABasicAnimation(keyPath: "transform.translation.x")
-                slide.fromValue = right ? 5 : -5; slide.toValue = 0; slide.duration = motion
-                slide.timingFunction = CAMediaTimingFunction(name: .easeOut)
-                detailSurface.layer?.add(slide, forKey: "slide")
-            }
+            // Fade content only: animating the root view transform clips AppKit-backed hosting views.
+            let fade = CABasicAnimation(keyPath: "opacity")
+            fade.fromValue = wasVisible ? 0.72 : 0; fade.toValue = 1
+            fade.duration = motion; fade.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            detailSurface.layer?.add(fade, forKey: "visibility")
         }
         if clock == nil {
             let timer = Timer(timeInterval: 60, repeats: true) { [weak self] _ in
@@ -398,29 +394,36 @@ final class SidebarSurface: NSView {
         let height = OverviewLayout.height(windowCount: account.state.snapshot?.windows.count ?? 0,
                                           hasNotice: account.state.error != nil || account.state.stale, availableHeight: visibleScreen.visibleFrame.height)
         let frame = SidebarLayout.detailFrame(bar: panel.frame, rowY: row.midY, size: NSSize(width: OverviewLayout.width + 8, height: height), screen: visibleScreen.visibleFrame, right: right)
+        // Commit final geometry before sizing the hosting view. Autoresizing the already-sized
+        // child by the parent's delta used to double-apply height changes and crop its header.
+        detail.setFrame(frame, display: true)
+        layoutDetailContent()
+        detailSurface.layoutSubtreeIfNeeded()
+    }
+    private func layoutDetailContent() {
+        let bounds = detailSurface.bounds
+        guard bounds.width > 8, bounds.height > 0 else { return }
         CATransaction.begin(); CATransaction.setDisableActions(true)
-        detailHost?.frame = NSRect(x: right ? 0 : 8, y: 0, width: OverviewLayout.width, height: frame.height)
-        pointer.frame = NSRect(origin: .zero, size: frame.size)
-        let tipY = min(frame.height - 20, max(20, row.midY - frame.minY))
+        detailHost?.frame = NSRect(x: right ? 0 : 8, y: 0, width: bounds.width - 8, height: bounds.height)
+        pointer.frame = bounds
+        let row = cells.first { $0.id == selectedID }.map { panel.convertToScreen($0.convert($0.bounds, to: nil)) }
+        let tipY = min(bounds.height - 20, max(20, (row?.midY ?? detail.frame.midY) - detail.frame.minY))
         let path = CGMutablePath()
-        path.move(to: CGPoint(x: right ? frame.width - 8 : 8, y: tipY - 6))
-        path.addLine(to: CGPoint(x: right ? frame.width : 0, y: tipY))
-        path.addLine(to: CGPoint(x: right ? frame.width - 8 : 8, y: tipY + 6)); path.closeSubpath()
+        path.move(to: CGPoint(x: right ? bounds.width - 8 : 8, y: tipY - 6))
+        path.addLine(to: CGPoint(x: right ? bounds.width : 0, y: tipY))
+        path.addLine(to: CGPoint(x: right ? bounds.width - 8 : 8, y: tipY + 6)); path.closeSubpath()
         pointer.path = path
         CATransaction.commit()
-        if animated && motion > 0 {
-            NSAnimationContext.runAnimationGroup { c in
-                c.duration = motion; c.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-                detail.animator().setFrame(frame, display: true)
-            }
-        } else { detail.setFrame(frame, display: true) }
     }
     func togglePin() {
         guard let selectedID else { return }
         if pinned { pinned = false; model.pinned = false; if !pointerInBar && !pointerInDetail { scheduleClose(); scheduleIdleCollapse() } }
         else { select(selectedID, pin: true) }
     }
-    func cancelClose() { generation += 1; closeWork?.cancel(); closeWork = nil; detail.alphaValue = 1 }
+    func cancelClose() {
+        generation += 1; closeWork?.cancel(); closeWork = nil
+        detailSurface.layer?.removeAnimation(forKey: "visibility"); detail.alphaValue = 1
+    }
     func scheduleClose() {
         guard !pinned else { return }
         closeWork?.cancel()
@@ -434,10 +437,13 @@ final class SidebarSurface: NSView {
         generation += 1; let token = generation
         detailSurface.layer?.removeAllAnimations()
         guard animated && motion > 0 && detail.isVisible else { detail.orderOut(nil); detail.alphaValue = 1; return }
-        NSAnimationContext.runAnimationGroup { context in context.duration = motion; detail.animator().alphaValue = 0 }
+        let fade = CABasicAnimation(keyPath: "opacity")
+        fade.fromValue = detailSurface.layer?.presentation()?.opacity ?? 1; fade.toValue = 0
+        fade.duration = motion; fade.fillMode = .forwards; fade.isRemovedOnCompletion = false
+        detailSurface.layer?.add(fade, forKey: "visibility")
         let work = DispatchWorkItem { [weak self] in
             guard let self, self.generation == token else { return }
-            self.detail.orderOut(nil); self.detail.alphaValue = 1; self.closeWork = nil
+            self.detail.orderOut(nil); self.detailSurface.layer?.removeAnimation(forKey: "visibility"); self.detail.alphaValue = 1; self.closeWork = nil
         }
         closeWork = work; DispatchQueue.main.asyncAfter(deadline: .now() + motion, execute: work)
     }

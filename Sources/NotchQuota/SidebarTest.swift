@@ -35,6 +35,29 @@ extension AppDelegate {
             bar.hover(first); await wait(0.6)
             check(bar.selectedID == first && bar.hoverWork == nil, "rapid switching settles on final target")
             check(lastAttempt == requests, "hover and pin never query credentials or network")
+            for candidate in visibleTargets {
+                bar.select(candidate.id, pin: false); await wait(0.4)
+                let expected = NSRect(x: bar.right ? 0 : 8, y: 0, width: OverviewLayout.width, height: bar.detailSurface.bounds.height)
+                check(bar.detailHost?.frame == expected, "detail hosting frame matches window after changing quota count")
+            }
+            let savedAntigravity = states[.antigravity]
+            states[.antigravity]?.error = "网络请求失败，请检查系统代理"
+            bar.select(QuotaTarget.antigravity.id, pin: false); updateSidebar(); await wait(0.4)
+            check(bar.detailHost?.frame.height == bar.detailSurface.bounds.height && bar.detailHost?.frame.minY == 0,
+                  "error notice resizes detail without cropping header")
+            capture("sidebar-error-detail", view: bar.detailSurface)
+            for index in 0..<20 {
+                bar.select(visibleTargets[index % visibleTargets.count].id, pin: false); await wait(0.025)
+            }
+            bar.select(first, pin: false); await wait(0.4)
+            check(bar.detailHost?.frame.height == bar.detailSurface.bounds.height && bar.detailHost?.frame.minY == 0,
+                  "rapid varying-height switches settle without clipping")
+            check(bar.cells.allSatisfy { $0.toolTip == nil }, "account tooltips cannot cover quota details")
+            bar.dismiss(animated: true); await wait(0.05); bar.select(first, pin: false); await wait(0.4)
+            check(bar.detail.isVisible && bar.detail.alphaValue == 1 && bar.detailSurface.layer?.animationKeys()?.isEmpty != false,
+                  "reopening during fade does not inherit old hide animation")
+            states[.antigravity] = savedAntigravity
+
             capture("sidebar-strip", view: bar.surface); capture("sidebar-detail", view: bar.detailSurface)
             bar.dismiss(animated: false); await wait()
             check(bar.clock == nil && bar.closeWork == nil && bar.hoverWork == nil, "idle owns no sidebar timers or scheduled work")

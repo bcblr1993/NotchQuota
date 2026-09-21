@@ -66,7 +66,7 @@ struct QuotaOverview: View {
                             .frame(width: 28, height: 28).contentShape(Rectangle())
                     }.buttonStyle(.plain).disabled(model.total < 2 && !model.sidebarMode)
                         .help(model.sidebarMode ? "固定或取消固定详情" : (model.total > 1 ? "点击切换下一个账号" : "当前只有一个账号"))
-                        .accessibilityLabel("切换账号")
+                        .accessibilityLabel(model.sidebarMode ? "固定或取消固定详情" : "切换账号")
                     VStack(alignment: .leading, spacing: 3) {
                         Text(account.title).font(.system(size: 12, weight: .semibold)).lineLimit(1)
                         if !account.subtitle.isEmpty {
@@ -130,7 +130,7 @@ struct QuotaOverview: View {
         }
         .animation(reduceMotion || model.sidebarMode ? nil : .easeInOut(duration: 0.2), value: model.accounts.first?.id)
         .frame(width: OverviewLayout.width)
-         .background {
+        .background {
             if model.sidebarMode {
                 LinearGradient(colors: [Color(red: 0.085, green: 0.095, blue: 0.13), Color(red: 0.045, green: 0.05, blue: 0.065)], startPoint: .topLeading, endPoint: .bottomTrailing)
             } else { Color(nsColor: .windowBackgroundColor) }
