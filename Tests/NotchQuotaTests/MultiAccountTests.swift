@@ -2,6 +2,16 @@ import XCTest
 @testable import NotchQuota
 
 final class MultiAccountTests: XCTestCase {
+    @MainActor func testCredentialPanelAllowsExtensionlessFilesInHiddenDirectories() {
+        let panel = AppDelegate.credentialFilePanel()
+        XCTAssertTrue(panel.showsHiddenFiles)
+        XCTAssertTrue(panel.canChooseFiles)
+        XCTAssertFalse(panel.canChooseDirectories)
+        XCTAssertTrue(panel.allowedContentTypes.isEmpty)
+        XCTAssertTrue(panel.allowsOtherFileTypes)
+        XCTAssertFalse(panel.allowsMultipleSelection)
+    }
+
     func testGenericFilenameDiscoveryDoesNotGuessAmbiguousSources() {
         let a = URL(fileURLWithPath: "/different-user/custom/a-standalone-oauth-token")
         let b = URL(fileURLWithPath: "/different-user/custom/b-standalone-oauth-token")

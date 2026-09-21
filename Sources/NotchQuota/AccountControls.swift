@@ -129,12 +129,29 @@ extension AppDelegate {
         accountAliases[candidate.id] = String(field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines).prefix(40))
         saveAccountPreferences(); updateView()
     }
+    @MainActor static func credentialFilePanel() -> NSOpenPanel {
+        let panel = NSOpenPanel()
+        panel.title = "第 2/2 步：选择该实例的 OAuth 认证文件"
+        panel.message = "可选择 standalone-oauth-token 等无扩展名文件或 JSON 文件，无需重命名。请选择与上一步应用对应的文件；不会修改原文件。"
+        panel.prompt = "添加实例"
+        panel.allowedContentTypes = []
+        panel.allowsOtherFileTypes = true
+        panel.canChooseFiles = true; panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false; panel.showsHiddenFiles = true
+        let directory = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".gemini")
+        panel.directoryURL = FileManager.default.fileExists(atPath: directory.path) ? directory : FileManager.default.homeDirectoryForCurrentUser
+        return panel
+    }
     @objc func addManualInstance() {
         activeMenu?.cancelTracking(); NSApp.activate(ignoringOtherApps: true)
-        let app = NSOpenPanel(); app.title = "选择 Antigravity 实例应用"; app.allowedContentTypes = [.applicationBundle]; app.allowsMultipleSelection = false
+        let app = NSOpenPanel(); app.title = "第 1/2 步：选择 Antigravity 实例应用"
+        app.message = "先选择对应的 Antigravity .app 应用；下一步再选择 OAuth 认证文件。"
+        app.prompt = "下一步"; app.allowedContentTypes = [.applicationBundle]; app.allowsMultipleSelection = false
+        app.directoryURL = URL(fileURLWithPath: "/Applications")
         guard app.runModal() == .OK, let appURL = app.url else { return }
         guard AntigravityDiscovery.isApplication(appURL) else { accountAlert("所选应用不是支持的 Antigravity 实例"); return }
-        let file = NSOpenPanel(); file.title = "选择该实例的登录 JSON 文件"; file.message = "支持含 token.access_token 和 token.refresh_token 的本地登录文件。不会修改文件或原应用。"; file.allowsMultipleSelection = false
+        let file = Self.credentialFilePanel()
+        NSApp.activate(ignoringOtherApps: true)
         guard file.runModal() == .OK, let fileURL = file.url else { return }
         let instance = AntigravityInstance(appPath: appURL.path, credentialPath: fileURL.path, name: appURL.deletingPathExtension().lastPathComponent, manual: true)
         do { _ = try GoogleCredentials.read(instance: instance) }
