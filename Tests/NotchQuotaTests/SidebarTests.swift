@@ -53,6 +53,10 @@ final class SidebarTests: XCTestCase {
             let handle = SidebarLayout.collapsedFrame(expanded: expanded, screen: screen, docked: docked, right: right)
             XCTAssertTrue(screen.contains(handle))
             XCTAssertEqual(handle.width, docked ? 18 : 40)
+            let peek = SidebarLayout.collapsedFrame(expanded: expanded, screen: screen, docked: docked, right: right, peeking: true)
+            XCTAssertTrue(screen.contains(peek))
+            XCTAssertEqual(peek.width, docked ? 28 : 40)
+            if docked { XCTAssertEqual(right ? peek.maxX : peek.minX, right ? handle.maxX : handle.minX) }
         } }
     }
     func testSavedSidebarModeIsRestoredOnOldAndNewSystems() {

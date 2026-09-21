@@ -54,10 +54,9 @@ extension AppDelegate {
                   "rapid varying-height switches settle without clipping")
             check(bar.cells.allSatisfy { $0.toolTip == nil }, "account tooltips cannot cover quota details")
             bar.dismiss(animated: true); await wait(0.05); bar.select(first, pin: false); await wait(0.4)
-            // Wait for the render server to retire our transition; unrelated AppKit layer
-            // animations are not evidence of a stale close operation.
-            for _ in 0..<30 where bar.detailSurface.layer?.animation(forKey: "visibility") != nil { await wait(0.02) }
-            check(bar.detail.isVisible && bar.detail.alphaValue == 1 && bar.closeWork == nil && bar.detailSurface.layer?.animation(forKey: "visibility") == nil,
+            // A completed CA animation can retain its key while its host is occluded.
+            // Verify visible opacity and cancelled close work, not render-server key retirement.
+            check(bar.detail.isVisible && bar.detail.alphaValue == 1 && bar.closeWork == nil && (bar.detailSurface.layer?.presentation()?.opacity ?? 1) > 0.99,
                   "reopening during fade does not inherit old hide animation")
             states[.antigravity] = savedAntigravity
 
@@ -97,8 +96,15 @@ extension AppDelegate {
                 check(!bar.docked && abs(bar.panel.frame.midX - screen.visibleFrame.midX) < 1, "drag placement supports free floating position")
                 bar.exitBar(); bar.scheduleIdleCollapse(after: 0.1); await wait(0.6)
                 check(bar.collapsed && bar.panel.frame.width == 40 && bar.clock == nil && bar.idleWork == nil, "idle floating strip becomes quiet cute capsule")
+                check(!bar.surface.chromeVisible && bar.surface.layer?.borderWidth == 0 && bar.surface.layer?.backgroundColor == nil,
+                      "collapsed kitten has no capsule background or border")
                 capture("sidebar-capsule", view: bar.surface)
-                bar.enterBar(); await wait(0.5)
+                bar.enterBar(); await wait(0.12)
+                check(bar.collapsed && bar.expandWork != nil, "brief hover peeks without expanding")
+                capture("sidebar-cat-peek", view: bar.surface)
+                bar.exitBar(); await wait(0.5)
+                check(bar.collapsed && bar.expandWork == nil, "passing pointer cancels pending expansion")
+                bar.enterBar(); await wait(1.0)
                 check(!bar.collapsed && bar.panel.frame.width == 52, "pointer entry expands capsule")
                 bar.select(first, pin: true); bar.exitBar(); bar.scheduleIdleCollapse(after: 0.1); await wait(0.5)
                 check(!bar.collapsed && bar.pinned, "pinned detail prevents automatic folding")
@@ -107,12 +113,20 @@ extension AppDelegate {
                 bar.exitBar(); bar.scheduleIdleCollapse(after: 0.1); await wait(0.6)
                 check(bar.docked && bar.collapsed && bar.panel.frame.width == 18 && abs(bar.panel.frame.maxX - screen.visibleFrame.maxX) < 1, "edge docking leaves only slim handle")
                 capture("sidebar-edge-handle", view: bar.surface)
+                check(bar.hasCatAnimations, "idle kitten keeps gentle layer animations")
+                suppressMotion = true; updateSidebar()
+                check(!bar.hasCatAnimations, "reduced motion stops idle kitten animations")
+                suppressMotion = false; updateSidebar()
+                bar.enterBar(); await wait(0.30)
+                check(bar.collapsed && bar.panel.frame.width == 28, "hovered edge kitten extends inward before expansion")
+                capture("sidebar-cat-edge-peek", view: bar.surface)
+                bar.exitBar()
                 bar.setCollapsed(false); await wait(0.4)
                 for i in 0..<10 { bar.setCollapsed(i % 2 == 0); await wait(0.04) }
                 bar.setCollapsed(false); await wait(0.6)
                 check(!bar.collapsed && bar.panel.frame.width == 52, "rapid fold reversal settles expanded")
                 hideTemporarily(for: 900)
-                check(bar.idleWork == nil && !bar.panel.isVisible, "temporary hide cancels folding work")
+                check(bar.idleWork == nil && bar.expandWork == nil && !bar.hasCatAnimations && !bar.panel.isVisible, "temporary hide cancels folding and kitten animation work")
                 restoreTemporaryVisibility()
             }
             setDisplayMode(.menuBar); await wait()
@@ -143,7 +157,7 @@ extension AppDelegate {
                 await wait(20)
                 durations.sort()
                 print("BENCH selection_main_thread_ms p50=\(durations[durations.count / 2]) p95=\(durations[Int(Double(durations.count) * 0.95)]) max=\(durations.last!)")
-                check(bar.clock == nil && bar.hoverWork == nil && bar.closeWork == nil, "benchmark returns to zero sidebar work")
+                check(bar.clock == nil && bar.hoverWork == nil && bar.closeWork == nil, "benchmark returns to no scheduled sidebar tasks")
             }
             print("SIDEBAR COMPLETE: \(failures == 0 ? "PASS" : "FAIL")"); fflush(stdout)
             exit(failures == 0 ? 0 : 1)
