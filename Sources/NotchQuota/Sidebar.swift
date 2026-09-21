@@ -161,6 +161,7 @@ final class SidebarSurface: NSView {
     func setChromeVisible(_ visible: Bool) {
         chromeVisible = visible
         CATransaction.begin(); CATransaction.setDisableActions(true)
+        if !visible { finish.removeAllAnimations() }
         finish.opacity = visible ? 1 : 0; layer?.backgroundColor = nil
         layer?.borderWidth = visible ? 0.5 : 0
         CATransaction.commit()
@@ -171,6 +172,7 @@ final class SidebarSurface: NSView {
         finish.add(fade, forKey: "chrome")
     }
     func stopChromeAnimation() { finish.removeAllAnimations() }
+    var hasChromeAnimation: Bool { finish.animationKeys()?.isEmpty == false }
     override func layout() {
         super.layout()
         CATransaction.begin(); CATransaction.setDisableActions(true)
@@ -391,7 +393,9 @@ final class SidebarSurface: NSView {
             c.timingFunction = CAMediaTimingFunction(controlPoints: 0.22, 0.75, 0.25, 1)
             panel.animator().setFrame(new, display: true)
         }
-        surface.animateChrome(from: value ? 1 : 0, duration: value ? 0.22 : 0.28)
+        // Never fade dark chrome over the transparent collapsed character.
+        // Its corner clipping and window geometry have already changed at this point.
+        if !value { surface.animateChrome(from: 0, duration: 0.28) }
         let spring = CASpringAnimation(keyPath: "transform.scale.y")
         spring.fromValue = value ? 0.92 : 0.96; spring.toValue = 1; spring.stiffness = 320; spring.damping = 24; spring.duration = 0.36
         surface.layer?.add(spring, forKey: "fold")

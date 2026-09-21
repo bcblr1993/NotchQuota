@@ -82,7 +82,9 @@ extension AppDelegate {
             smokeInstalled = Provider.allCases; discoverInstalled(); updateSidebar()
             for screen in NSScreen.screens {
                 bar.place(at: NSPoint(x: screen.visibleFrame.midX, y: screen.visibleFrame.midY), screen: screen)
-                bar.exitBar(); bar.setCollapsed(true); await wait(0.4)
+                bar.exitBar(); bar.setCollapsed(true)
+                check(!bar.surface.chromeVisible && !bar.surface.hasChromeAnimation, "collapse removes dark chrome immediately")
+                await wait(0.4)
                 check(screen.visibleFrame.contains(bar.panel.frame), "collapsed sidebar stays on explicitly selected physical display")
                 bar.setCollapsed(false); await wait(0.4)
                 bar.screenChanged(); updateSidebar()
