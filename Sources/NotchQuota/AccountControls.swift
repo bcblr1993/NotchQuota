@@ -25,6 +25,7 @@ enum AvatarImage {
 
 extension AppDelegate {
     func loadAccountPreferences(from defaults: UserDefaults = .standard) {
+        accountOrder = defaults.stringArray(forKey: "accountOrder") ?? []
         enabledInstances = Set(defaults.stringArray(forKey: "enabledInstances") ?? [])
         accountBindings = defaults.dictionary(forKey: "accountBindings") as? [String: String] ?? [:]
         blockedAccounts = Set(defaults.stringArray(forKey: "blockedAccounts") ?? [])
@@ -33,6 +34,7 @@ extension AppDelegate {
     }
     func saveAccountPreferences(to defaults: UserDefaults = .standard) {
         guard !demo, !testMode else { return }
+        defaults.set(accountOrder, forKey: "accountOrder")
         defaults.set(enabledInstances.sorted(), forKey: "enabledInstances")
         defaults.set(accountBindings, forKey: "accountBindings")
         defaults.set(accountAliases, forKey: "accountAliases")
@@ -106,6 +108,9 @@ extension AppDelegate {
             item.isEnabled = !demo && !testMode && (action != #selector(renameAccount) || !visibleTargets.isEmpty)
             settings.addItem(item)
         }
+        let ordering = NSMenuItem(title: "调整账号顺序…", action: #selector(editAccountOrder), keyEquivalent: "")
+        ordering.target = self; ordering.isEnabled = visibleTargets.count > 1
+        settings.addItem(ordering)
         if let instance = target.instance, instance.manual {
             let remove = NSMenuItem(title: "移除此手动实例", action: #selector(removeManualInstance), keyEquivalent: ""); remove.target = self; settings.addItem(remove)
         }

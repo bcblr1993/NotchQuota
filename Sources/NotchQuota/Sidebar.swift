@@ -23,6 +23,15 @@ enum SidebarLayout {
         result.origin.x = screen.minX + 10 + max(0, screen.width - width - 20) * CGFloat(min(1, max(0, xFraction)))
         return result
     }
+    static func floatingFrame(count: Int, screen: NSRect, center: NSPoint) -> NSRect {
+        var result = frame(count: count, screen: screen, right: false, fraction: 0.5)
+        result.origin.x = min(screen.maxX - result.width, max(screen.minX, center.x - result.width / 2))
+        result.origin.y = min(screen.maxY - result.height, max(screen.minY, center.y - result.height / 2))
+        return result
+    }
+    static func shouldDock(center: NSPoint, screen: NSRect) -> Bool {
+        min(abs(center.x - screen.minX), abs(center.x - screen.maxX)) <= 52
+    }
     static func collapsedFrame(expanded: NSRect, screen: NSRect, docked: Bool, right: Bool, peeking: Bool = false, scale: CGFloat = 1, halfHidden: Bool = false) -> NSRect {
         let width: CGFloat = (docked && halfHidden ? 22 : 40) * scale
         let height: CGFloat = 40 * scale
@@ -132,6 +141,7 @@ final class SidebarCell: NSView {
     }
     override func mouseEntered(with event: NSEvent) { enter?() }
     override func mouseExited(with event: NSEvent) { leave?() }
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
     override func mouseDown(with event: NSEvent) { down = event }
     override func mouseDragged(with event: NSEvent) {
         guard let original = down, hypot(event.locationInWindow.x - original.locationInWindow.x, event.locationInWindow.y - original.locationInWindow.y) > 3 else { return }
@@ -190,6 +200,7 @@ final class SidebarSurface: NSView {
     }
     override func mouseEntered(with event: NSEvent) { entered?() }
     override func mouseExited(with event: NSEvent) { exited?() }
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
     override func mouseDown(with event: NSEvent) { drag?(event) }
     override func rightMouseDown(with event: NSEvent) { context?(event, self) }
 }
@@ -210,12 +221,14 @@ final class SidebarSurface: NSView {
     private(set) var right = true
     private var fraction = 0.5
     private var xFraction = 0.5
+    private var floatingCenter: NSPoint?
     private(set) var docked = true
     private(set) var collapsed = false
     private(set) var autoCollapse = true
     private(set) var idleWork: DispatchWorkItem?
     private(set) var expandWork: DispatchWorkItem?
     private var pointerInBar = false, pointerInDetail = false, dragging = false
+    private var dragMonitor: Any?
     private let emblem = SidebarEmblem()
     private(set) var appearance: SidebarAppearance = .capsule
     private var screenID: UInt32?
@@ -237,7 +250,8 @@ final class SidebarSurface: NSView {
         return screens.first { ($0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? UInt32) == resolved } ?? screens[0]
     }
     var onSelect: ((String) -> Void)?, onMenu: ((NSEvent?, NSView) -> Void)?
-    var acceptsInput = true
+    var acceptsInput = true { didSet { reminder.view.acceptsInput = acceptsInput } }
+    let reminder = ThoughtReminder()
     let persist: Bool
     init(model: OverviewModel, persist: Bool) {
         self.model = model; self.persist = persist
@@ -256,6 +270,10 @@ final class SidebarSurface: NSView {
             screenID = d.object(forKey: "sidebarScreen") as? UInt32
             docked = d.object(forKey: "sidebarDocked") as? Bool ?? true
             xFraction = d.object(forKey: "sidebarX") as? Double ?? 0.5
+            if let x = d.object(forKey: "sidebarAnchorX") as? Double,
+               let y = d.object(forKey: "sidebarAnchorY") as? Double {
+                floatingCenter = NSPoint(x: x, y: y)
+            }
             autoCollapse = d.object(forKey: "sidebarAutoCollapse") as? Bool ?? true
             appearance = .restored(d.string(forKey: SidebarAppearance.preferenceKey))
         }
@@ -287,6 +305,35 @@ final class SidebarSurface: NSView {
         detailSurface.entered = { [weak self] in if self?.acceptsInput == true { self?.pointerInDetail = true; self?.cancelIdle(); self?.cancelClose() } }
         detailSurface.exited = { [weak self] in if self?.acceptsInput == true { self?.pointerInDetail = false; self?.scheduleClose(); self?.scheduleIdleCollapse() } }
     }
+    private var reminderTask: Task<Void, Never>?
+    private var reminderCycle = ReminderCycle()
+    var onReminderRefresh: ((String) async -> OverviewAccount?)?
+    private var canRemind: Bool {
+        appearance == .ghost && collapsed && panel.isVisible && !dragging && !pinned &&
+            !pointerInBar && !pointerInDetail && !detail.isVisible
+    }
+    func showThoughtReminder() {
+        guard canRemind, reminderTask == nil else { return }
+        let ids = accounts.map(\.id)
+        reminderTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            defer { self.reminderTask = nil }
+            for _ in ids {
+                guard !Task.isCancelled, self.canRemind, let id = self.reminderCycle.next(in: ids) else { return }
+                guard let account = await self.onReminderRefresh?(id) else { continue }
+                guard !Task.isCancelled, self.canRemind, self.accounts.contains(where: { $0.id == id }) else { return }
+                self.reminder.showNext(accounts: [account], anchor: self.panel.frame,
+                    screen: self.visibleScreen.visibleFrame, animated: self.motion > 0)
+                return
+            }
+        }
+    }
+    private func syncReminder() {
+        if appearance == .ghost, panel.isVisible, persist {
+            reminder.tick = { [weak self] in self?.showThoughtReminder() }
+            reminder.start()
+        } else { reminder.stop() }
+    }
     private func configureEmblem() {
         CATransaction.begin(); CATransaction.setDisableActions(true)
         emblem.configure(appearance)
@@ -296,7 +343,7 @@ final class SidebarSurface: NSView {
         guard appearance != value else { return }
         cancelExpand()
         appearance = value
-        configureEmblem(); updateEmblemStatus(); position(); updateEmblemIdle()
+        configureEmblem(); updateEmblemStatus(); position(); updateEmblemIdle(); syncReminder()
         if persist { UserDefaults.standard.set(value.rawValue, forKey: SidebarAppearance.preferenceKey) }
     }
     private func updateEmblemStatus() {
@@ -318,6 +365,7 @@ final class SidebarSurface: NSView {
     private func cancelExpand() { expandWork?.cancel(); expandWork = nil }
     func update(_ values: [OverviewAccount], duration: TimeInterval) {
         motion = duration; accounts = values
+        if accounts.map(\.id) != cells.map(\.id) { reminder.hide() }
         updateEmblemStatus()
         if cells.map(\.id) != values.map(\.id) {
             dismiss(animated: false)
@@ -337,11 +385,18 @@ final class SidebarSurface: NSView {
         if duration == 0 { for cell in cells { cell.stopAnimations() }; detailSurface.layer?.removeAllAnimations(); surface.layer?.removeAllAnimations(); surface.stopChromeAnimation(); stopEmblemAnimations() }
         if !panel.isVisible && !values.isEmpty { position(); panel.orderFrontRegardless(); scheduleIdleCollapse() }
         if !selecting, detail.isVisible, let selectedID, values.contains(where: { $0.id == selectedID }) { positionDetail(animated: false) }
-        updateEmblemIdle()
+        updateEmblemIdle(); syncReminder()
     }
     func position() {
+        reminder.hide()
+        guard !dragging else { return }
         let screen = visibleScreen
-        let expanded = expandedFrame(on: screen)
+        var expanded = expandedFrame(on: screen)
+        // Keep the resting icon at the drop anchor even when the taller list must move to fit.
+        if collapsed, !docked, let anchor = floatingCenter {
+            expanded.origin.x = screen.visibleFrame.minX + anchor.x * screen.visibleFrame.width - expanded.width / 2
+            expanded.origin.y = screen.visibleFrame.minY + anchor.y * screen.visibleFrame.height - expanded.height / 2
+        }
         let frame = collapsed ? SidebarLayout.collapsedFrame(expanded: expanded, screen: screen.visibleFrame, docked: docked, right: right, peeking: pointerInBar, scale: appearance.scale, halfHidden: appearance == .ghost) : expanded
         panel.setFrame(frame, display: true)
         scroll.isHidden = collapsed
@@ -357,7 +412,12 @@ final class SidebarSurface: NSView {
         if !cells.isEmpty { document.scroll(NSPoint(x: 0, y: max(0, document.bounds.height - scroll.bounds.height))) }
     }
     func expandedFrame(on screen: NSScreen) -> NSRect {
-        docked ? SidebarLayout.frame(count: cells.count, screen: screen.visibleFrame, right: right, fraction: fraction)
+        if !docked, let anchor = floatingCenter {
+            let frame = screen.visibleFrame
+            return SidebarLayout.floatingFrame(count: cells.count, screen: frame,
+                center: NSPoint(x: frame.minX + anchor.x * frame.width, y: frame.minY + anchor.y * frame.height))
+        }
+        return docked ? SidebarLayout.frame(count: cells.count, screen: screen.visibleFrame, right: right, fraction: fraction)
             : SidebarLayout.floatingFrame(count: cells.count, screen: screen.visibleFrame, xFraction: xFraction, yFraction: fraction)
     }
     func cancelIdle() { idleWork?.cancel(); idleWork = nil }
@@ -368,6 +428,8 @@ final class SidebarSurface: NSView {
         idleWork = work; DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
     }
     func enterBar() {
+        reminderTask?.cancel()
+        reminder.hide()
         pointerInBar = true; cancelIdle(); cancelExpand()
         guard !dragging else { return }
         setCollapsed(false)
@@ -424,6 +486,7 @@ final class SidebarSurface: NSView {
     }
     func screenChanged() { cancelExpand(); cancelIdle(); dismiss(animated: false); position(); scheduleIdleCollapse() }
     func hover(_ id: String) {
+        guard !dragging else { return }
         cancelIdle(); setCollapsed(false)
         cancelClose(); hoverWork?.cancel(); hoverWork = nil
         cells.first { $0.id == id }?.highlight(true)
@@ -524,28 +587,53 @@ final class SidebarSurface: NSView {
         closeWork = work; DispatchQueue.main.asyncAfter(deadline: .now() + motion, execute: work)
     }
     func hide() {
+        reminderTask?.cancel()
+        reminder.stop()
+        if let dragMonitor { NSEvent.removeMonitor(dragMonitor) }
+        dragMonitor = nil; dragging = false
         cancelExpand(); cancelIdle(); dismiss(animated: false); cells.forEach { $0.stopAnimations() }
         surface.layer?.removeAllAnimations(); surface.stopChromeAnimation(); stopEmblemAnimations()
         pointerInBar = false; pointerInDetail = false; panel.orderOut(nil)
     }
     private func drag(_ event: NSEvent) {
+        reminderTask?.cancel()
+        reminder.hide()
+        guard !dragging else { return }
         cancelExpand(); cancelIdle(); dismiss(animated: false); dragging = true
+        let start = panel.convertPoint(toScreen: event.locationInWindow)
         let before = panel.frame
-        panel.performDrag(with: event)
-        dragging = false
-        if before == panel.frame { setCollapsed(false); return }
+        // Track global pointer deltas directly. Native performDrag on this nonactivating
+        // panel can return without moving, especially after hover changes its geometry.
+        dragMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDragged, .leftMouseUp]) { [weak self] next in
+            guard let self else { return next }
+            let pointer = NSEvent.mouseLocation
+            self.panel.setFrameOrigin(NSPoint(x: before.minX + pointer.x - start.x,
+                                              y: before.minY + pointer.y - start.y))
+            if next.type == .leftMouseUp {
+                self.finishDrag(moved: hypot(pointer.x - start.x, pointer.y - start.y) > 2)
+            }
+            return nil
+        }
+    }
+    private func finishDrag(moved: Bool) {
+        if let dragMonitor { NSEvent.removeMonitor(dragMonitor) }
+        dragMonitor = nil; dragging = false
+        guard moved else { setCollapsed(false); scheduleIdleCollapse(); return }
         let point = NSPoint(x: panel.frame.midX, y: panel.frame.midY)
-        let screen = NSScreen.screens.first { $0.frame.contains(point) } ?? visibleScreen
-        place(at: point, screen: screen)
+        let screen = NSScreen.screens.first { $0.frame.contains(NSEvent.mouseLocation) }
+            ?? NSScreen.screens.first { $0.frame.contains(point) } ?? visibleScreen
+        place(at: point, screen: screen, keepCollapsed: collapsed)
         pointerInBar = panel.frame.contains(NSEvent.mouseLocation)
         scheduleIdleCollapse()
     }
-    func place(at point: NSPoint, screen: NSScreen) {
-        cancelExpand(); cancelIdle(); collapsed = false
+    func place(at point: NSPoint, screen: NSScreen, keepCollapsed: Bool = false) {
+        cancelExpand(); cancelIdle(); collapsed = keepCollapsed
         updateEmblemIdle()
         screenID = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? UInt32
         right = point.x >= screen.visibleFrame.midX
-        docked = min(abs(point.x - screen.visibleFrame.minX), abs(point.x - screen.visibleFrame.maxX)) <= 52
+        docked = SidebarLayout.shouldDock(center: point, screen: screen.visibleFrame)
+        floatingCenter = NSPoint(x: min(1, max(0, (point.x - screen.visibleFrame.minX) / screen.visibleFrame.width)),
+                                 y: min(1, max(0, (point.y - screen.visibleFrame.minY) / screen.visibleFrame.height)))
         let height = SidebarLayout.frame(count: cells.count, screen: screen.visibleFrame, right: right, fraction: 0.5).height
         let range = max(1, screen.visibleFrame.height - height - 24)
         fraction = Double(min(1, max(0, (point.y - height / 2 - screen.visibleFrame.minY - 12) / range)))
@@ -555,9 +643,10 @@ final class SidebarSurface: NSView {
             let d = UserDefaults.standard
             d.set(right, forKey: "sidebarRight"); d.set(fraction, forKey: "sidebarPosition"); d.set(screenID, forKey: "sidebarScreen")
             d.set(docked, forKey: "sidebarDocked"); d.set(xFraction, forKey: "sidebarX")
+            d.set(floatingCenter?.x, forKey: "sidebarAnchorX"); d.set(floatingCenter?.y, forKey: "sidebarAnchorY")
         }
     }
-    func showMenu(_ event: NSEvent?, _ view: NSView) { cancelExpand(); cancelIdle(); dismiss(animated: false); onMenu?(event, view); scheduleIdleCollapse() }
+    func showMenu(_ event: NSEvent?, _ view: NSView) { reminderTask?.cancel(); reminder.hide(); cancelExpand(); cancelIdle(); dismiss(animated: false); onMenu?(event, view); scheduleIdleCollapse() }
 }
 
 @MainActor extension AppDelegate {
@@ -575,6 +664,16 @@ final class SidebarSurface: NSView {
         if sidebar == nil {
             let controller = SidebarController(model: overviewModel, persist: !demo && !testMode)
             controller.acceptsInput = !testMode
+            controller.onReminderRefresh = { [weak self] id in
+                guard let self, !self.refreshSuspended, !self.temporarilyHidden,
+                      let candidate = self.visibleTargets.first(where: { $0.id == id }) else { return nil }
+                let started = self.states[candidate]?.loading == true ? (self.lastAttempt[candidate] ?? Date()) : Date()
+                self.refresh(candidate, force: true)
+                await self.refreshJobs[candidate.id]?.value
+                guard !Task.isCancelled, !self.refreshSuspended, !self.temporarilyHidden,
+                      let state = self.states[candidate], ReminderFreshness.accepts(state, since: started) else { return nil }
+                return self.sidebarAccounts().first { $0.id == id }
+            }
             controller.onSelect = { [weak self] id in
                 guard let self, let selected = self.visibleTargets.first(where: { $0.id == id }) else { return }
                 self.target = selected; self.updateOverview()

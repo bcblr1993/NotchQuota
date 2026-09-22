@@ -20,6 +20,7 @@ enum SidebarAppearance: String, CaseIterable {
 /// Only the selected design is allocated. Gradients are static layers, not live blur or shaders.
 final class SidebarEmblem: CALayer {
     private let indicator = CAShapeLayer(), valueLabel = CATextLayer(), eyes = CALayer()
+    private var leaningBody: CALayer?
     private(set) var appearance: SidebarAppearance = .capsule
     override init() { super.init(); bounds = CGRect(x: 0, y: 0, width: 36, height: 36) }
     override init(layer: Any) { super.init(layer: layer) }
@@ -27,6 +28,7 @@ final class SidebarEmblem: CALayer {
 
     func configure(_ style: SidebarAppearance) {
         stopMotion()
+        leaningBody = nil
         sublayers?.forEach { $0.removeFromSuperlayer() }
         eyes.sublayers?.forEach { $0.removeFromSuperlayer() }
         appearance = style
@@ -86,7 +88,7 @@ final class SidebarEmblem: CALayer {
             leaningBody.position = CGPoint(x: 27, y: 13)
             let bodyLayers = sublayers ?? []
             for child in bodyLayers { child.removeFromSuperlayer(); leaningBody.addSublayer(child) }
-            leaningBody.transform = CATransform3DMakeRotation(14 * .pi / 180, 0, 0, 1)
+            self.leaningBody = leaningBody
             addSublayer(leaningBody)
         }
         if style != .ghost { addSublayer(indicator) }
@@ -124,6 +126,8 @@ final class SidebarEmblem: CALayer {
         }
     }
     func face(right: Bool, docked: Bool, peeking: Bool) {
+        // Only edge-docked ghosts lean; a free-floating ghost stands upright.
+        leaningBody?.transform = docked ? CATransform3DMakeRotation(14 * .pi / 180, 0, 0, 1) : CATransform3DIdentity
         // Mirror only the character, never quota text.
         sublayerTransform = CATransform3DMakeScale((appearance == .ghost && !right ? -1 : 1) * appearance.scale, appearance.scale, 1)
     }

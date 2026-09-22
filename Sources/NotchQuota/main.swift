@@ -12,6 +12,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var instances: [AntigravityInstance] = []
     var manualInstances: [AntigravityInstance] = []
     var enabledInstances: Set<String> = []
+    var accountOrder: [String] = []
     var accountBindings: [String: String] = [:]
     var accountNames: [String: String] = [:]
     var accountAliases: [String: String] = [:]
@@ -177,6 +178,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         detectedApps = candidates
         var selected = candidates.filter { !excludedProviders.contains($0) && !blockedAccounts.contains($0.rawValue) }.map(QuotaTarget.standard)
         selected += instances.filter { enabledInstances.contains($0.id) && !blockedAccounts.contains($0.id) && $0.supported }.map { QuotaTarget(provider: .antigravity, instance: $0) }
+        selected = AccountOrder.apply(selected, saved: accountOrder)
         let old = visibleTargets
         visibleTargets = selected
         updateRecoveryItem()
@@ -318,9 +320,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
     }
-    func refresh(_ candidate: QuotaTarget) {
+    func refresh(_ candidate: QuotaTarget, force: Bool = false) {
         guard !refreshSuspended, visibleTargets.contains(candidate), !demo, !testMode, states[candidate]?.loading != true else { return }
-        if let last = lastAttempt[candidate], Date().timeIntervalSince(last) < 30 { return }
+        if !force, let last = lastAttempt[candidate], Date().timeIntervalSince(last) < 30 { return }
         lastAttempt[candidate] = Date()
         var state = states[candidate] ?? DisplayState(); state.loading = true; states[candidate] = state
         if candidate == target || displayMode != .island { updateView(animated: true) }
@@ -647,6 +649,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             await settle(0.6)
             check(target == loopStart, "account icon cycles all selected accounts")
             if let view = overviewPopover?.contentViewController?.view { capture("menu-single-detail", view: view) }
+            let originalOrder = accountOrder, originalTargets = visibleTargets, originalTarget = target
+            let requestsBeforeOrder = lastAttempt
+            accountOrder = Array(visibleTargets.reversed()).map(\.id); discoverInstalled()
+            check(visibleTargets == Array(originalTargets.reversed()) && target == originalTarget, "custom order changes sequence without changing selected account")
+            let sortedIndex = visibleTargets.firstIndex(of: target)!
+            check(nextTarget() == visibleTargets[(sortedIndex + 1) % visibleTargets.count], "account cycling follows custom order")
+            check(lastAttempt == requestsBeforeOrder, "sorting does not request credentials or quotas")
+            let orderEditor = AccountOrderEditor(accounts: visibleTargets) { $0.title }
+            let editorOriginal = orderEditor.accounts
+            orderEditor.reorder(from: 0, to: editorOriginal.count - 1)
+            check(orderEditor.accounts == Array(editorOriginal.dropFirst()) + [editorOriginal[0]], "editor moves first account to last without losing accounts")
+            orderEditor.reorder(from: editorOriginal.count - 1, to: 0)
+            orderEditor.reorder(from: -1, to: 0)
+            check(orderEditor.accounts == editorOriginal && visibleTargets == editorOriginal, "editor moves back and keeps unsaved order isolated")
+            let editorWindow = NSWindow(contentRect: orderEditor.view.frame, styleMask: [.titled, .closable], backing: .buffered, defer: false)
+            editorWindow.title = "调整账号顺序"; editorWindow.contentView = orderEditor.view
+            orderEditor.view.layoutSubtreeIfNeeded()
+            capture("account-order-editor", view: orderEditor.view)
+            editorWindow.orderOut(nil)
+            accountOrder = originalOrder; discoverInstalled()
             let selectedAccounts = visibleTargets
             visibleTargets = [target]; updateOverview()
             let onlyAccount = target; let attemptsBeforeClick = lastAttempt

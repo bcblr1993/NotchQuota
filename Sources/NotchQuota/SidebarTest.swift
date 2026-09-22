@@ -92,6 +92,15 @@ extension AppDelegate {
                 bar.select(first, pin: false); await wait(0.4)
                 check(screen.visibleFrame.contains(bar.detail.frame), "account details remain on sidebar display")
                 bar.dismiss(animated: false)
+                let drop = NSPoint(x: screen.visibleFrame.midX + 80, y: screen.visibleFrame.maxY - 60)
+                bar.place(at: drop, screen: screen, keepCollapsed: true)
+                check(abs(bar.panel.frame.midX - drop.x) < 1 && abs(bar.panel.frame.midY - drop.y) < 1,
+                      "free icon retains drop anchor near display top")
+                bar.setCollapsed(false); await wait(0.4)
+                check(screen.visibleFrame.contains(bar.panel.frame), "expanded list fits drop destination display")
+                bar.exitBar(); bar.setCollapsed(true); await wait(0.4)
+                check(abs(bar.panel.frame.midX - drop.x) < 1 && abs(bar.panel.frame.midY - drop.y) < 1,
+                      "collapse returns icon to drop anchor")
             }
             if let screen = NSScreen.main {
                 bar.place(at: NSPoint(x: screen.visibleFrame.midX, y: screen.visibleFrame.midY), screen: screen)
@@ -155,6 +164,40 @@ extension AppDelegate {
                 hideTemporarily(for: 900)
                 check(bar.idleWork == nil && bar.expandWork == nil && !bar.hasEmblemAnimations && !bar.panel.isVisible, "temporary hide cancels folding and emblem animation work")
                 restoreTemporaryVisibility()
+            }
+            if let screen = NSScreen.main {
+                bar.setAppearance(.ghost)
+                bar.place(at: NSPoint(x: screen.visibleFrame.midX, y: screen.visibleFrame.midY), screen: screen)
+                bar.exitBar(); bar.setCollapsed(true); await wait(0.4)
+                let savedRefresh = bar.onReminderRefresh
+                var attempted: [String] = []
+                let reminderAccounts = sidebarAccounts()
+                bar.onReminderRefresh = { id in
+                    attempted.append(id)
+                    return attempted.count == 1 ? nil : reminderAccounts.first { $0.id == id }
+                }
+                bar.showThoughtReminder(); await wait(0.6)
+                check(attempted.count == 2 && bar.reminder.panel.isVisible, "reminder skips unavailable account and shows next successful refresh")
+                capture("thought-floating", view: bar.reminder.view)
+                check(screen.visibleFrame.contains(bar.reminder.panel.frame), "thought cloud fits current display")
+                await wait(5.2)
+                check(!bar.reminder.panel.isVisible, "thought cloud disappears after five seconds")
+                bar.onReminderRefresh = { _ in nil }
+                bar.showThoughtReminder(); await wait(0.3)
+                check(!bar.reminder.panel.isVisible, "all offline accounts produce no stale reminder")
+                bar.onReminderRefresh = savedRefresh
+                for right in [false, true] {
+                    bar.place(at: NSPoint(x: right ? screen.visibleFrame.maxX - 10 : screen.visibleFrame.minX + 10, y: screen.visibleFrame.midY), screen: screen)
+                    bar.exitBar(); bar.setCollapsed(true); await wait(0.4)
+                    bar.reminder.showNext(accounts: reminderAccounts, anchor: bar.panel.frame, screen: screen.visibleFrame, animated: false)
+                    capture(right ? "thought-right" : "thought-left", view: bar.reminder.view)
+                    check(screen.visibleFrame.contains(bar.reminder.panel.frame), "edge thought cloud remains inside display")
+                }
+                bar.reminder.start()
+                check(bar.reminder.timer?.timeInterval == 600, "thought reminder has one ten-minute timer")
+                bar.hide()
+                check(!bar.reminder.panel.isVisible && bar.reminder.timer == nil, "hide stops reminder and its timer")
+                updateSidebar()
             }
             setDisplayMode(.menuBar); await wait()
             check(!bar.panel.isVisible && !bar.detail.isVisible && quotaStatusItem != nil, "switching to menu mode removes sidebar")

@@ -76,6 +76,20 @@ final class SidebarTests: XCTestCase {
             }
         }
     }
+    func testDropAnchorOnOffsetDisplaysAndEdgeThreshold() {
+        for screen in [CGRect(x: -1920, y: 200, width: 1920, height: 1080), CGRect(x: 0, y: -900, width: 1440, height: 900)] {
+            let point = CGPoint(x: screen.midX + 100, y: screen.midY - 80)
+            let frame = SidebarLayout.floatingFrame(count: 8, screen: screen, center: point)
+            XCTAssertEqual(frame.midX, point.x)
+            XCTAssertEqual(frame.midY, point.y)
+            XCTAssertFalse(SidebarLayout.shouldDock(center: point, screen: screen))
+            for x in [screen.minX + 20, screen.maxX - 20] {
+                XCTAssertTrue(SidebarLayout.shouldDock(center: CGPoint(x: x, y: point.y), screen: screen))
+            }
+            XCTAssertFalse(SidebarLayout.shouldDock(center: CGPoint(x: screen.minX + 80, y: point.y), screen: screen))
+            XCTAssertTrue(screen.contains(SidebarLayout.floatingFrame(count: 8, screen: screen, center: CGPoint(x: screen.midX, y: screen.maxY - 20))))
+        }
+    }
     func testSavedSidebarModeIsRestoredOnOldAndNewSystems() {
         XCTAssertEqual(DisplayMode.restored("sidebar", majorVersion: 26), .sidebar)
         XCTAssertEqual(DisplayMode.restored("sidebar", majorVersion: 27), .sidebar)
