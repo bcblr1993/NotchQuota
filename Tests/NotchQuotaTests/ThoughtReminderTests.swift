@@ -2,6 +2,35 @@ import XCTest
 @testable import NotchQuota
 
 final class ThoughtReminderTests: XCTestCase {
+    func testRecoveryRequiresKnownTransitionToOneHundredForEachWindow() {
+        func snapshot(_ five: Double?, _ week: Double?) -> Snapshot {
+            Snapshot(windows: [
+                .init(id: "five_hour", label: "5 小时", remaining: five, reset: nil),
+                .init(id: "seven_day", label: "每周", remaining: week, reset: nil)
+            ])
+        }
+        let before = snapshot(82, 0)
+        XCTAssertEqual(QuotaRecoveryDetector.restoredWindows(previous: nil, current: snapshot(100, 100)), [])
+        XCTAssertEqual(QuotaRecoveryDetector.restoredWindows(previous: before, current: snapshot(100, 0)), ["5 小时"])
+        XCTAssertEqual(QuotaRecoveryDetector.restoredWindows(previous: before, current: snapshot(82, 100)), ["每周"])
+        XCTAssertEqual(QuotaRecoveryDetector.restoredWindows(previous: before, current: snapshot(100, 100)), ["5 小时", "每周"])
+        XCTAssertEqual(QuotaRecoveryDetector.restoredWindows(previous: snapshot(100, 100), current: snapshot(100, 100)), [])
+        XCTAssertEqual(QuotaRecoveryDetector.restoredWindows(previous: snapshot(nil, 50), current: snapshot(100, 99)), [])
+    }
+    func testRecoveryDoesNotConfuseDifferentWindowsOrUnrelatedQuota() {
+        let before = Snapshot(windows: [
+            .init(id: "old", label: "5 小时", remaining: 2, reset: nil),
+            .init(id: "model", label: "Gemini · 每周", remaining: 35, reset: nil),
+            .init(id: "other", label: "月度", remaining: 10, reset: nil)
+        ])
+        let after = Snapshot(windows: [
+            .init(id: "new", label: "5 小时", remaining: 100, reset: nil),
+            .init(id: "model", label: "Gemini · 每周", remaining: 100, reset: nil),
+            .init(id: "other", label: "月度", remaining: 100, reset: nil)
+        ])
+        XCTAssertEqual(QuotaRecoveryDetector.restoredWindows(previous: before, current: after), ["Gemini · 每周"])
+        XCTAssertEqual(RecoveryAnnouncement(windows: ["5 小时", "每周"], style: .cloud).title, "5 小时与每周额度")
+    }
     func testRotationSurvivesAccountRemovalAndReordering() {
         var cycle = ReminderCycle()
         XCTAssertEqual(cycle.next(in: ["a", "b", "c"]), "a")

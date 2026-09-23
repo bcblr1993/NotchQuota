@@ -182,6 +182,15 @@ extension AppDelegate {
                 check(screen.visibleFrame.contains(bar.reminder.panel.frame), "thought cloud fits current display")
                 await wait(5.2)
                 check(!bar.reminder.panel.isVisible, "thought cloud disappears after five seconds")
+                if let recoveryAccount = reminderAccounts.first {
+                    for (style, name) in [(RecoveryStyle.cloud, "cloud"), (.bounce, "bounce"), (.edge, "edge")] {
+                        bar.showQuotaRecovery(accountID: recoveryAccount.id, windows: ["5 小时"], style: style)
+                        check(bar.reminder.panel.isVisible, "recovery \(name) is visible")
+                        check(screen.visibleFrame.contains(bar.reminder.panel.frame), "recovery \(name) fits the display")
+                        capture("recovery-\(name)", view: bar.reminder.view)
+                    }
+                    bar.reminder.hide()
+                }
                 bar.onReminderRefresh = { _ in nil }
                 bar.showThoughtReminder(); await wait(0.3)
                 check(!bar.reminder.panel.isVisible, "all offline accounts produce no stale reminder")

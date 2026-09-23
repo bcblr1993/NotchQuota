@@ -312,8 +312,25 @@ final class SidebarSurface: NSView {
         appearance == .ghost && collapsed && panel.isVisible && !dragging && !pinned &&
             !pointerInBar && !pointerInDetail && !detail.isVisible
     }
+    func showQuotaRecovery(accountID: String, windows: [String], style: RecoveryStyle? = nil) {
+        guard canRemind, let account = accounts.first(where: { $0.id == accountID }),
+              !windows.isEmpty else { return }
+        reminderTask?.cancel()
+        reminderTask = nil
+        let chosen = style ?? RecoveryStyle.allCases.randomElement()!
+        reminder.showRecovery(account: account, windows: windows, style: chosen,
+                              anchor: panel.frame, screen: visibleScreen.visibleFrame,
+                              animated: motion > 0)
+        if chosen == .bounce && motion > 0 {
+            let hop = CAKeyframeAnimation(keyPath: "transform.translation.y")
+            hop.values = [0, 6, 0, 3, 0]
+            hop.keyTimes = [0, 0.22, 0.48, 0.7, 1]
+            hop.duration = 0.55
+            emblem.add(hop, forKey: "recoveryHop")
+        }
+    }
     func showThoughtReminder() {
-        guard canRemind, reminderTask == nil else { return }
+        guard canRemind, reminderTask == nil, !reminder.panel.isVisible else { return }
         let ids = accounts.map(\.id)
         reminderTask = Task { @MainActor [weak self] in
             guard let self else { return }

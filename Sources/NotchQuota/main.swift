@@ -348,8 +348,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     self.accountNames[candidate.id] = identity.displayName
                     self.saveAccountPreferences()
                 }
+                let restored = QuotaRecoveryDetector.restoredWindows(
+                    previous: self.states[candidate]?.snapshot, current: snapshot)
                 self.states[candidate] = DisplayState(snapshot: snapshot)
                 if candidate == self.target || self.displayMode != .island { self.updateView(animated: true) }
+                if !restored.isEmpty, self.displayMode == .sidebar {
+                    self.sidebar?.showQuotaRecovery(accountID: candidate.id, windows: restored)
+                }
                 if let identity { await self.updateAccountAvatar(identity, for: candidate, generation: generation) }
             } catch {
                 guard let self, !Task.isCancelled, self.accountGenerations[candidate.id, default: 0] == generation else { return }
