@@ -254,9 +254,11 @@ final class ThoughtView: NSView {
     }
     func start() {
         guard timer == nil else { return }
-        let timer = Timer(timeInterval: 600, repeats: true) { [weak self] _ in Task { @MainActor in self?.tick?() } }
+        let timer = Timer(timeInterval: 600, target: self, selector: #selector(timerFired(_:)),
+                          userInfo: nil, repeats: true)
         timer.tolerance = 15; self.timer = timer; RunLoop.main.add(timer, forMode: .default)
     }
+    @objc private func timerFired(_ timer: Timer) { tick?() }
     func stop() { timer?.invalidate(); timer = nil; hide() }
     func showNext(accounts: [OverviewAccount], anchor: NSRect, screen: NSRect, animated: Bool) {
         guard let id = cycle.next(in: accounts.map(\.id)), let account = accounts.first(where: { $0.id == id }) else { return }
