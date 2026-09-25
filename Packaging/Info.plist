@@ -33,7 +33,7 @@
 	<key>SUEnableSystemProfiling</key>
 	<false/>
 	<key>SUFeedURL</key>
-	<string>https://github.com/bcblr1993/NotchQuota/releases/latest/download/appcast.xml</string>
+	<string>https://aethernative.com/apps/notchquota/appcast.xml</string>
 	<key>SUPublicEDKey</key>
 	<string>gFoiXS+rSGkGXDFDZ4Bty0KZkcDSBmCNXwggh3hljak=</string>
 	<key>SURequireSignedFeed</key>
