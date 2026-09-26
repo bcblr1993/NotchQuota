@@ -1,0 +1,36 @@
+# 发布（或编辑）GitHub Release 后，通知 aethernative.com 同步这个版本。
+# 放到软件仓库的 .github/workflows/ 下，只需要改下面的 APP_ID。
+# 需要仓库 Secret：AETHERNATIVE_SITE_TOKEN（只对 bcblr1993/aethernative-site 有 Contents 读写权限的令牌）。
+name: 同步到官网
+
+on:
+  release:
+    types: [published, edited]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 要同步的 Release 标签（如 v1.0.27）
+        required: true
+
+permissions: {}
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    if: github.event_name == 'workflow_dispatch' || !github.event.release.draft
+    steps:
+      - name: 通知 aethernative.com
+        env:
+          APP_ID: notchquota
+          TAG: ${{ github.event.release.tag_name || inputs.tag }}
+          GH_TOKEN: ${{ secrets.AETHERNATIVE_SITE_TOKEN }}
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::error::缺少仓库 Secret AETHERNATIVE_SITE_TOKEN"
+            exit 1
+          fi
+          jq -n --arg app "$APP_ID" --arg tag "$TAG" \
+            '{event_type: "app-release", client_payload: {app: $app, tag: $tag}}' \
+            | gh api repos/bcblr1993/aethernative-site/dispatches --input -
+          echo "已通知官网同步 $APP_ID $TAG：https://github.com/bcblr1993/aethernative-site/actions" >> "$GITHUB_STEP_SUMMARY"
